@@ -18,15 +18,12 @@ static bool read_floats(const cgltf_accessor *acc, std::vector<float> &out, int 
     return true;
 }
 
-static bool load(AAssetManager *assets, const std::string &file, ControllerModel &model) {
-    AAsset *asset = AAssetManager_open(assets, file.c_str(), AASSET_MODE_BUFFER);
-    if (!asset) {
+static bool load(const ModelCache::Reader &reader, const std::string &file, ControllerModel &model) {
+    std::vector<uint8_t> bytes;
+    if (!reader(file, bytes)) {
         LOGE("model %s missing", file.c_str());
         return false;
     }
-    std::vector<uint8_t> bytes(AAsset_getLength(asset));
-    AAsset_read(asset, bytes.data(), bytes.size());
-    AAsset_close(asset);
 
     cgltf_options options{};
     cgltf_data *data = nullptr;
@@ -75,9 +72,9 @@ const ControllerModel *ModelCache::get(const std::string &family, int hand) {
     std::string file = "models/" + family + (hand == 0 ? "_left.glb" : "_right.glb");
     auto it = loaded_.find(file);
     if (it != loaded_.end()) return &it->second;
-    if (failed_.count(file) || !assets_) return nullptr;
+    if (failed_.count(file) || !reader_) return nullptr;
     ControllerModel model;
-    if (!load(assets_, file, model)) {
+    if (!load(reader_, file, model)) {
         failed_[file] = true;
         return nullptr;
     }

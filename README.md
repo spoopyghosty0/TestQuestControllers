@@ -15,6 +15,10 @@ whether touch and analog values come through, and which controller the runtime s
 wherever Quest controllers are emulated or remapped (for example the Steam Frame through FramePort or another
 converter), and on a real Quest as the reference.
 
+![The app in demo mode: the Touch controllers in your hands and enlarged in front of you, next to the panel](docs/screenshot.png)
+
+*Demo mode, rendered on a PC from the app's own drawing code (`tools/render_host`).*
+
 ## Controller types
 
 | In the app | Interaction profile | Needs |
@@ -66,6 +70,10 @@ python3 tools/gen_profiles.py       # regenerate the controller table from the O
 python3 tools/gen_models.py         # regenerate the models (needs numpy)
 python3 tools/test_tables.py        # every input has its part in the model
 python3 tools/preview_models.py     # out/previews/models.png
+
+# the app's scene on a PC (Mesa EGL): profile index, demo time in seconds, --hands for controllers in view
+cmake -S tools/render_host -B out/render_host && cmake --build out/render_host
+out/render_host/render_host app/src/main/assets out/scene.ppm 0 5.3 --hands
 ```
 
 Releases are built by GitHub Actions from a `v*` tag matching `versionName` in `app/build.gradle.kts`: the APK, the

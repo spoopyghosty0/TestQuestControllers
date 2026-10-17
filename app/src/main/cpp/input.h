@@ -55,6 +55,7 @@ public:
     // Demo mode (a file named "demo" in the app's files folder): parts light up in turn without a controller,
     // for screenshots and for checking the models on a headset nobody wears.
     bool demo = false;
+    double demo_clock = -1;  // seconds; < 0 = real time (the host renderer sets it)
 
     std::vector<InputRow> rows;
     int bound = 0, skipped = 0;  // inputs bound / left out (system buttons, extension not enabled)

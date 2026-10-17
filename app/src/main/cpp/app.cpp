@@ -5,6 +5,7 @@
 // grip pose and as an enlarged pair in front of you. Changing the type destroys and recreates the session (bindings
 // can't change once action sets are attached); the instance is recreated only when the OpenXR version changes
 // (1.1 core profiles need an OpenXR 1.1 instance; 1.0 profiles get a 1.0 instance, as most games use).
+#include <android/asset_manager.h>
 #include <android/native_activity.h>
 #include <android_native_app_glue.h>
 #include <jni.h>
@@ -30,9 +31,8 @@
 #include "gfx.h"
 #include "input.h"
 #include "log.h"
-#include "models.h"
 #include "profiles.h"
-#include "ui.h"
+#include "scene.h"
 
 namespace {
 
@@ -46,9 +46,6 @@ const char *kOptionalExtensions[] = {
     "XR_META_touch_controller_plus",
     "XR_FB_touch_controller_proximity",
 };
-
-const Vec3 kPartIdle(0.11f, 0.11f, 0.12f), kPartUnbound(0.025f, 0.025f, 0.03f), kBody(0.045f, 0.048f, 0.055f),
-    kRing(0.06f, 0.063f, 0.07f), kOrange(1.0f, 0.36f, 0.03f), kBlue(0.08f, 0.32f, 1.0f), kNear(0.03f, 0.08f, 0.25f);
 
 struct Swap {
     XrSwapchain handle = XR_NULL_HANDLE;
@@ -65,9 +62,7 @@ public:
 private:
     android_app *android_;
     Gl gl_;
-    Renderer renderer_;
-    ModelCache models_;
-    Panel panel_;
+    Scene scene_;
 
     XrInstance instance_ = XR_NULL_HANDLE;
     int instance_minor_ = -1;
@@ -110,9 +105,6 @@ private:
     void update_ui(XrTime time);
     void place(XrTime time);
     void render_eye(const XrView &view, int eye, uint32_t image);
-    void draw_model(const ControllerModel &model, int hand, const Pose &base, float scale, bool labels,
-                    std::vector<FlatVertex> &tris);
-    Pose display_pose(int hand) const;
     XrSession session() const { return session_; }
 };
 
@@ -134,14 +126,16 @@ void App::save_choice() {
 bool App::init_loader() {
     PFN_xrInitializeLoaderKHR init = nullptr;
     if (XR_FAILED(xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrInitializeLoaderKHR", (PFN_xrVoidFunction *)&init)) ||
-        !init)
-        return false;
+        !init) {
+        LOGW("no xrInitializeLoaderKHR (a loader replaced by another one?): going on without it");
+        return true;
+    }
     XrLoaderInitInfoAndroidKHR info{XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR};
     info.applicationVM = android_->activity->vm;
     info.applicationContext = android_->activity->clazz;
     XrResult r = init((const XrLoaderInitInfoBaseHeaderKHR *)&info);
     LOGI("xrInitializeLoaderKHR -> %d", r);
-    return XR_SUCCEEDED(r);
+    return true;  // xrCreateInstance reports a loader that really doesn't work
 }
 
 bool App::open_instance(int minor) {
@@ -439,33 +433,20 @@ void App::place(XrTime time) {
     placed_ = true;
 }
 
-// Pose of the enlarged copy of one hand's model: in front of the user, face turned towards them.
-Pose App::display_pose(int hand) const {
-    float tilt = std::string(kProfiles[current_].family) == "go" ? 0.0f : deg(28);
-    float s = std::sin(tilt), c = std::cos(tilt), alpha = deg(30);
-    Vec3 n_w(0, std::sin(alpha), std::cos(alpha)), m_w(0, -std::cos(alpha), std::sin(alpha));
-    Vec3 y_w = n_w * s + m_w * c, z_w = n_w * (-c) + m_w * s;
-    Quat q = Quat::from_basis({1, 0, 0}, y_w, z_w);
-    Vec3 offset(hand == 0 ? -0.14f : 0.14f, -0.08f, -0.55f);
-    return anchor_ * Pose(q, offset);
-}
-
 void App::update_ui(XrTime time) {
     double t = now_s();
-    // panel: to the right of the models, turned towards the user
-    Vec3 at(0.55f, 0.02f, -0.72f);
-    panel_.pose = anchor_ * Pose(Quat::axis_angle({0, 1, 0}, std::atan2(-at.x, -at.z)), at);  // +Z to the user
+    scene_.layout(anchor_);
 
     int hover = -1;
     for (int h = 0; h < 2; ++h) {
         bool trig = input_.trigger_down(h);
         float u, v;
         Vec3 w;
-        if (input_.aim_valid[h] && panel_.hit(input_.aim[h], u, v, w)) {
-            int item = panel_.item_at(u, v);
+        if (input_.aim_valid[h] && scene_.panel.hit(input_.aim[h], u, v, w)) {
+            int item = scene_.panel.item_at(u, v);
             if (item >= 0) hover = item;
             if (trig && !trig_prev_[h] && item >= 0) {
-                const PanelItem &it = panel_.items()[item];
+                const PanelItem &it = scene_.panel.items()[item];
                 if (it.kind == kItemProfile && it.index != current_ && statuses_[it.index].available) {
                     pending_ = it.index;
                     message_.clear();
@@ -521,60 +502,6 @@ void App::update_ui(XrTime time) {
     }
 }
 
-void App::draw_model(const ControllerModel &model, int hand, const Pose &base, float scale, bool labels,
-                     std::vector<FlatVertex> &tris) {
-    bool flash = now_s() - haptic_flash_[hand] < 0.12;
-    Mat4 base_m = Mat4::from_pose(base, scale);
-    for (const ModelNode &node : model.nodes) {
-        Vec3 color = kPartIdle;
-        float emissive = 0;
-        Pose delta;
-        const std::string &n = node.name;
-        bool bound = false;
-        for (const auto &row : input_.rows)
-            if (row.hand == hand && row.part == n && row.action) bound = true;
-        if (n == "body" || n == "camera") {
-            color = flash ? kBlue * 0.35f : kBody;
-            emissive = flash ? 0.6f : 0;
-        } else if (n == "ring") {
-            color = kRing;
-        } else {
-            PartState st = input_.part(hand, n);
-            if (!bound) color = kPartUnbound;
-            if (st.near) color = kNear, emissive = 0.3f;
-            if (st.touched) color = kBlue, emissive = 0.5f;
-            if (st.value > 0.02f) {
-                color = color * (1 - st.value) + kOrange * st.value;
-                emissive = std::max(emissive, st.value * 0.7f);
-            }
-            if (st.pressed) color = kOrange, emissive = 0.85f;
-            if (n == "trigger") {
-                delta.q = Quat::axis_angle({1, 0, 0}, -st.value * deg(25));
-            } else if (n == "squeeze") {
-                delta.p = Vec3(0, -st.value * 0.003f, 0);
-            } else if (n == "thumbstick") {
-                delta.q = Quat::axis_angle({0, 0, 1}, -st.x * deg(20)) * Quat::axis_angle({1, 0, 0}, -st.y * deg(20));
-                if (st.pressed) delta.p = Vec3(0, -0.0015f, 0);
-            } else if (n == "trackpad") {
-                if (st.touched || st.pressed || st.x != 0 || st.y != 0) {
-                    Pose dot = node.rest * Pose(Quat(), Vec3(st.x * 0.012f, 0.0028f, -st.y * 0.012f));
-                    Mat4 m = base_m * Mat4::from_pose(dot, 0.0028f);
-                    renderer_.draw_mesh(renderer_.sphere, m, st.pressed ? kOrange : kBlue, 0.9f);
-                }
-            } else if (st.pressed) {
-                delta.p = Vec3(0, -0.0022f, 0);  // buttons go in
-            }
-            if (labels && st.any() && *part_label(n)) {
-                // label in front of the part, facing the user
-                Vec3 at = base.apply(node.rest.p * scale) + anchor_.q.rotate({0, 0.012f, 0.03f});
-                const float c[4] = {1.0f, 0.55f, 0.15f, 1};
-                world_text(tris, Pose(anchor_.q, at), 0.0011f, part_label(n), c);
-            }
-        }
-        renderer_.draw_mesh(node.mesh, base_m * Mat4::from_pose(node.rest * delta), color, emissive);
-    }
-}
-
 void App::render_eye(const XrView &view, int eye, uint32_t image) {
     Swap &s = swaps_[eye];
     glBindFramebuffer(GL_FRAMEBUFFER, s.target.fbos[image]);
@@ -586,49 +513,23 @@ void App::render_eye(const XrView &view, int eye, uint32_t image) {
     glClearColor(0.008f, 0.009f, 0.014f, 1);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    Pose eye_pose(view.pose);
-    Mat4 view_m = Mat4::from_pose(eye_pose.inverse());
-    renderer_.begin_eye(Mat4::projection(view.fov, 0.05f, 50.0f) * view_m);
-
-    std::vector<FlatVertex> tris, lines;
-    const char *family = kProfiles[current_].family;
-    for (int h = 0; h < 2; ++h) {
-        const ControllerModel *model = models_.get(family, h);
-        if (!model) continue;
-        if (input_.grip_valid[h]) draw_model(*model, h, input_.grip[h], 1.0f, false, tris);
-        draw_model(*model, h, display_pose(h), 2.4f, true, tris);
-        if (input_.aim_valid[h]) {
-            const Pose &aim = input_.aim[h];
-            float len = 1.5f, u, v;
-            Vec3 hit;
-            if (panel_.hit(aim, u, v, hit)) {
-                len = length(hit - aim.p);
-                renderer_.draw_mesh(renderer_.sphere, Mat4::from_pose(Pose(Quat(), hit), 0.006f),
-                                    {1.0f, 0.5f, 0.1f}, 1.0f);
-            }
-            Vec3 a = aim.p, b = aim.apply({0, 0, -len});
-            float r = h == 0 ? 0.3f : 1.0f, g = h == 0 ? 0.6f : 0.5f, bl = h == 0 ? 1.0f : 0.1f;
-            lines.push_back({a.x, a.y, a.z, r, g, bl, 0.9f});
-            lines.push_back({b.x, b.y, b.z, r, g, bl, 0.15f});
-        }
-    }
-    // the panel last: it's partly transparent
-    PanelInfo info;
-    info.runtime = runtime_;
-    info.system = system_name_;
-    info.api = api_;
-    info.current = current_;
-    info.profiles = statuses_;
-    info.suggest_result = suggest_result_;
-    info.reported[0] = reported_[0];
-    info.reported[1] = reported_[1];
-    info.message = message_;
-    info.haptics = haptics_;
-    info.input = &input_;
-    info.hover_item = hover_;
-    renderer_.draw_lines(lines);
-    panel_.build(info, tris);
-    renderer_.draw_flat(tris);
+    SceneData d;
+    d.current = current_;
+    d.input = &input_;
+    d.anchor = anchor_;
+    for (int h = 0; h < 2; ++h) d.flash[h] = now_s() - haptic_flash_[h] < 0.12;
+    d.panel.runtime = runtime_;
+    d.panel.system = system_name_;
+    d.panel.api = api_;
+    d.panel.profiles = statuses_;
+    d.panel.suggest_result = suggest_result_;
+    d.panel.reported[0] = reported_[0];
+    d.panel.reported[1] = reported_[1];
+    d.panel.message = message_;
+    d.panel.haptics = haptics_;
+    d.panel.hover_item = hover_;
+    Mat4 view_m = Mat4::from_pose(Pose(view.pose).inverse());
+    scene_.draw(Mat4::projection(view.fov, 0.05f, 50.0f) * view_m, d);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -694,8 +595,16 @@ void App::frame() {
 void App::run() {
     JNIEnv *env = nullptr;
     android_->activity->vm->AttachCurrentThread(&env, nullptr);
-    models_.set_assets(android_->activity->assetManager);
-    if (!gl_.init() || !renderer_.init() || !init_loader()) {
+    AAssetManager *assets = android_->activity->assetManager;
+    scene_.models.set_reader([assets](const std::string &path, std::vector<uint8_t> &out) {
+        AAsset *asset = AAssetManager_open(assets, path.c_str(), AASSET_MODE_BUFFER);
+        if (!asset) return false;
+        out.resize(AAsset_getLength(asset));
+        AAsset_read(asset, out.data(), out.size());
+        AAsset_close(asset);
+        return true;
+    });
+    if (!gl_.init() || !scene_.init() || !init_loader()) {
         LOGE("startup failed");
         ANativeActivity_finish(android_->activity);
     } else {

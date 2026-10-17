@@ -1,8 +1,8 @@
 // Controller models (glb files in the APK's assets/models).
 #pragma once
 
-#include <android/asset_manager.h>
-
+#include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -22,12 +22,14 @@ struct ControllerModel {
 
 class ModelCache {
 public:
-    void set_assets(AAssetManager *assets) { assets_ = assets; }
+    // Reads a file from the app's assets (models/<family>_<hand>.glb) into `out`.
+    using Reader = std::function<bool(const std::string &path, std::vector<uint8_t> &out)>;
+    void set_reader(Reader reader) { reader_ = std::move(reader); }
     // family as in Profile::family, hand 0 = left, 1 = right. nullptr if the file is missing or broken.
     const ControllerModel *get(const std::string &family, int hand);
 
 private:
-    AAssetManager *assets_ = nullptr;
+    Reader reader_;
     std::map<std::string, ControllerModel> loaded_;
     std::map<std::string, bool> failed_;
 };

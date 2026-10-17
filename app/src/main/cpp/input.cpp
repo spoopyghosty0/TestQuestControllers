@@ -215,10 +215,11 @@ void Input::sync(XrSession session, XrSpace base, XrTime time) {
     }
 }
 
-static PartState demo_part(int hand, const std::string &name) {
+static PartState demo_part(int hand, const std::string &name, double clock) {
     static const char *kOrder[] = {"trigger", "squeeze", "thumbstick", "x", "y", "a", "b", "menu", "thumbrest",
                                    "trackpad", "back", "stylus"};
-    double t = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    double t = clock >= 0 ? clock
+                          : std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     int n = sizeof(kOrder) / sizeof(kOrder[0]);
     int slot = (int)(t / 1.5) % n;
     float phase = (float)std::fmod(t, 1.5) / 1.5f;  // 0..1 within the slot
@@ -241,7 +242,7 @@ static PartState demo_part(int hand, const std::string &name) {
 }
 
 PartState Input::part(int hand, const std::string &name) const {
-    if (demo) return demo_part(hand, name);
+    if (demo) return demo_part(hand, name, demo_clock);
     PartState st;
     for (const auto &row : rows) {
         if (row.hand != hand || row.part != name || !row.value.active) continue;
