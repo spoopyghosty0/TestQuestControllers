@@ -1,0 +1,80 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Check generated tables
+        run: |
+          python3 tools/gen_profiles.py --check
+          python3 tools/test_tables.py
+
+      - uses: actions/setup-java@v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v6.4.0
+
+      - name: Release keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.TQC_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "TQC_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build
+        env:
+          TQC_KEYSTORE_PASSWORD: ${{ secrets.TQC_KEYSTORE_PASSWORD }}
+          TQC_KEY_ALIAS: ${{ secrets.TQC_KEY_ALIAS }}
+          TQC_KEY_PASSWORD: ${{ secrets.TQC_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Name the APK
+        run: |
+          version=$(sed -n 's/.*versionName = "\(.*\)"/\1/p' app/build.gradle.kts)
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          mkdir -p out
+          cp app/build/outputs/apk/release/app-release.apk "out/TestQuestControllers-$version.apk"
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: TestQuestControllers-${{ env.VERSION }}
+          path: out/*.apk
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [ "$tag" != "v$VERSION" ]; then
+            echo "tag $tag doesn't match versionName $VERSION"; exit 1
+          fi
+          if [ -z "$TQC_KEYSTORE" ]; then
+            echo "no release keystore: refusing to publish a debug-signed release"; exit 1
+          fi
+          apk="out/TestQuestControllers-$VERSION.apk"
+          python3 tools/make_install_manifest.py --apk "$apk" --tag "$tag" --repo "$GITHUB_REPOSITORY" \
+            --out out/frameport-install.json
+          (cd out && sha256sum *.apk frameport-install.json > SHA256SUMS.txt)
+          gh release create "$tag" out/*.apk out/frameport-install.json out/SHA256SUMS.txt \
+            --title "Test Quest Controllers $VERSION" --notes-from-tag
