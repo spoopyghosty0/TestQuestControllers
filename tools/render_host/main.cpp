@@ -1,6 +1,6 @@
 // Renders the app's scene on a PC (Mesa, surfaceless EGL) to check layout and highlighting without a headset.
 //
-//   render_host <assets dir> <out.ppm> [profile index] [demo seconds] [--hands]
+//   render_host <assets dir> <out.ppm> [profile index] [demo seconds] [--hands | --icon]
 //
 // Uses the app's own scene, model and panel code; OpenXR calls are stubbed (xr_stubs.cpp) and demo mode lights the
 // parts. --hands also places both controllers in front of the user, the right one pointing at the panel.
@@ -27,6 +27,7 @@ int main(int argc, char **argv) {
     int profile = argc > 3 ? std::atoi(argv[3]) : 0;
     double clock = argc > 4 ? std::atof(argv[4]) : 0.2;
     bool hands = argc > 5 && std::strcmp(argv[5], "--hands") == 0;
+    bool icon = argc > 5 && std::strcmp(argv[5], "--icon") == 0;  // close-up of the left model, for the app icon
     if (profile < 0 || profile >= kProfileCount) profile = 0;
 
     auto get_display = (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
@@ -48,7 +49,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    const int w = 1280, h = 960;
+    const int w = icon ? 1024 : 1280, h = icon ? 1024 : 960;
     GLuint tex, depth, fbo;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
@@ -110,7 +111,17 @@ int main(int argc, char **argv) {
     glClearColor(0.008f, 0.009f, 0.014f, 1);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     XrFovf fov{deg(-48), deg(48), deg(38), deg(-38)};
-    scene.draw(Mat4::projection(fov, 0.05f, 50.0f), d);
+    Mat4 view = Mat4::identity();
+    if (icon) {
+        d.labels = false;
+        fov = {deg(-11), deg(11), deg(11), deg(-11)};
+        Vec3 target = scene.display_pose(d, 0).p + Vec3(0, -0.02f, 0);
+        Vec3 fwd = normalize(target), right = normalize(cross(fwd, {0, 1, 0})), up = cross(right, fwd);
+        view = Mat4::from_pose(Pose(Quat::from_basis(right, up, -fwd), Vec3()).inverse());
+        glClearColor(0, 0, 0, 0);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    }
+    scene.draw(Mat4::projection(fov, 0.05f, 50.0f) * view, d);
 
     std::vector<unsigned char> px(w * h * 4);
     glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());

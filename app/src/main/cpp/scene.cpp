@@ -4,12 +4,11 @@
 #include <cmath>
 
 namespace {
-const Vec3 kPartIdle(0.16f, 0.165f, 0.18f), kPartUnbound(0.03f, 0.03f, 0.035f), kBody(0.045f, 0.048f, 0.055f),
-    kRing(0.06f, 0.063f, 0.07f), kOrange(1.0f, 0.36f, 0.03f), kBlue(0.08f, 0.32f, 1.0f), kNear(0.03f, 0.08f, 0.25f);
+const Vec3 kOrange(1.0f, 0.36f, 0.03f), kBlue(0.08f, 0.32f, 1.0f), kNear(0.03f, 0.08f, 0.25f);
 
 // layout, in the anchor's frame (metres; the user looks along -Z)
-const Vec3 kModelLeft(-0.30f, -0.06f, -0.62f), kModelRight(-0.09f, -0.06f, -0.62f);
-const float kModelScale = 1.9f;
+const Vec3 kModelLeft(-0.34f, -0.07f, -0.66f), kModelRight(-0.08f, -0.07f, -0.66f);
+const float kModelScale = 1.6f;
 const Vec3 kPanelAt(0.36f, 0.0f, -0.85f);
 }  // namespace
 
@@ -22,7 +21,7 @@ void Scene::layout(const Pose &anchor) {
 Pose Scene::display_pose(const SceneData &d, int hand) const {
     // the face's normal in the grip frame is (0, sin t, -cos t) for a face tilted by t; turn it to point at the
     // user and slightly up (alpha), keeping the controller's +X to the right
-    float tilt = std::string(kProfiles[d.current].family) == "go" ? 0.0f : deg(28);
+    float tilt = std::string(kProfiles[d.current].family) == "oculus-go" ? 0.0f : deg(28);
     float s = std::sin(tilt), c = std::cos(tilt), alpha = deg(20);
     Vec3 n_w(0, std::sin(alpha), std::cos(alpha)), m_w(0, -std::cos(alpha), std::sin(alpha));
     Vec3 y_w = n_w * s + m_w * c, z_w = n_w * (-c) + m_w * s;
@@ -32,58 +31,98 @@ Pose Scene::display_pose(const SceneData &d, int hand) const {
     return d.anchor * Pose(turn * q, at);
 }
 
+namespace {
+struct NodeState {
+    Quat r;
+    Vec3 t, s;
+    bool visible = true;
+};
+
+void walk(const ControllerModel &m, const std::vector<NodeState> &st, int n, const Mat4 &parent,
+          std::vector<Mat4> &world, std::vector<bool> &visible, bool parent_visible) {
+    world[n] = parent * Mat4::from_trs(st[n].r, st[n].t, st[n].s);
+    visible[n] = parent_visible && st[n].visible;
+    for (int c : m.nodes[n].children) walk(m, st, c, world[n], world, visible, visible[n]);
+}
+}  // namespace
+
 void Scene::draw_model(const ControllerModel &model, int hand, const Pose &base, float scale, bool labels,
                        const SceneData &d, std::vector<FlatVertex> &tris) {
     const Input &input = *d.input;
-    Mat4 base_m = Mat4::from_pose(base, scale);
-    for (const ModelNode &node : model.nodes) {
-        Vec3 color = kPartIdle;
-        float emissive = 0;
-        Pose delta;
-        const std::string &n = node.name;
-        if (n == "body" || n == "camera") {
-            color = d.flash[hand] ? kBlue * 0.35f : kBody;
-            emissive = d.flash[hand] ? 0.6f : 0;
-        } else if (n == "ring") {
-            if (labels) continue;  // the enlarged copy is a button diagram: its ring would hide the buttons
-            color = kRing;
-        } else {
-            bool bound = false;
-            for (const auto &row : input.rows)
-                if (row.hand == hand && row.part == n && row.action) bound = true;
-            PartState st = input.part(hand, n);
-            if (!bound && !input.demo) color = kPartUnbound;
-            if (st.near) color = kNear, emissive = 0.3f;
-            if (st.touched) color = kBlue, emissive = 0.5f;
-            if (st.value > 0.02f) {
-                color = color * (1 - st.value) + kOrange * st.value;
-                emissive = std::max(emissive, st.value * 0.7f);
-            }
-            if (st.pressed) color = kOrange, emissive = 0.85f;
-            if (n == "trigger") {
-                delta.q = Quat::axis_angle({1, 0, 0}, -st.value * deg(25));
-            } else if (n == "squeeze") {
-                delta.p = Vec3(0, -st.value * 0.003f, 0);
-            } else if (n == "thumbstick") {
-                delta.q = Quat::axis_angle({0, 0, 1}, -st.x * deg(20)) * Quat::axis_angle({1, 0, 0}, -st.y * deg(20));
-                if (st.pressed) delta.p = Vec3(0, -0.0015f, 0);
-            } else if (n == "trackpad") {
-                if (st.touched || st.pressed || st.x != 0 || st.y != 0) {
-                    Pose dot = node.rest * Pose(Quat(), Vec3(st.x * 0.012f, 0.0028f, -st.y * 0.012f));
-                    renderer.draw_mesh(renderer.sphere, base_m * Mat4::from_pose(dot, 0.0028f),
-                                       st.pressed ? kOrange : kBlue, 0.9f);
-                }
-            } else if (st.pressed) {
-                delta.p = Vec3(0, -0.0022f, 0);  // buttons go in
-            }
-            if (labels && st.any() && *part_label(n)) {
-                // label above the part, facing the user
-                Vec3 at = base.apply(node.rest.p * scale) + d.anchor.q.rotate({0, 0.026f, 0.03f});
-                const float c[4] = {1.0f, 0.55f, 0.15f, 1};
-                world_text(tris, Pose(d.anchor.q, at), 0.0024f, part_label(n), c);
-            }
+    // each component's input state (WebXR terms: state default/touched/pressed, button value, axes)
+    struct CompState {
+        PartState part;
+        unsigned state = 1;  // bit of ModelResponse::states
+        float button = 0;
+        bool bound = false;
+    };
+    std::vector<CompState> cs(model.components.size());
+    for (size_t i = 0; i < model.components.size(); ++i) {
+        CompState &c = cs[i];
+        c.part = input.part(hand, model.components[i].part);
+        c.state = c.part.pressed ? 4 : (c.part.touched ? 2 : 1);
+        c.button = c.part.pressed ? std::max(c.part.value, 1.0f) : c.part.value;
+        if (model.components[i].part == "trigger" || model.components[i].part == "squeeze") c.button = c.part.value;
+        for (const auto &row : input.rows)
+            if (row.hand == hand && row.part == model.components[i].part && row.action) c.bound = true;
+    }
+
+    std::vector<NodeState> st(model.nodes.size());
+    for (size_t n = 0; n < model.nodes.size(); ++n) st[n] = {model.nodes[n].r, model.nodes[n].t, model.nodes[n].s};
+    for (const ModelResponse &r : model.responses) {
+        const CompState &c = cs[r.component];
+        bool active = (r.states & c.state) != 0;
+        if (r.visibility) {
+            st[r.value].visible = active;
+            continue;
         }
-        renderer.draw_mesh(node.mesh, base_m * Mat4::from_pose(node.rest * delta), color, emissive);
+        float t = 0;
+        if (active) {
+            if (r.property == ModelResponse::kButton) t = c.button;
+            else if (r.property == ModelResponse::kXAxis) t = (c.part.x + 1) * 0.5f;
+            else if (r.property == ModelResponse::kYAxis) t = (1 - c.part.y) * 0.5f;  // WebXR: +y is towards you
+        } else if (r.property != ModelResponse::kButton) {
+            t = 0.5f;  // axes rest in the middle
+        }
+        t = std::min(1.0f, std::max(0.0f, t));
+        const ModelNode &a = model.nodes[r.min], &b = model.nodes[r.max];
+        st[r.value].r = Quat::nlerp(a.r, b.r, t);
+        st[r.value].t = a.t + (b.t - a.t) * t;
+    }
+
+    std::vector<Mat4> world(model.nodes.size());
+    std::vector<bool> visible(model.nodes.size());
+    Mat4 base_m = Mat4::from_pose(base, scale);
+    for (int root : model.roots) walk(model, st, root, base_m, world, visible, true);
+
+    for (size_t n = 0; n < model.nodes.size(); ++n) {
+        const ModelNode &node = model.nodes[n];
+        if (!visible[n] || node.prims.empty()) continue;
+        Vec3 tint;
+        float amount = 0;
+        if (node.component >= 0) {
+            const CompState &c = cs[node.component];
+            const PartState &p = c.part;
+            if (!c.bound && !input.demo) tint = Vec3(0.01f, 0.01f, 0.012f), amount = 0.6f;
+            if (p.near) tint = kNear, amount = 0.45f;
+            if (p.touched) tint = kBlue, amount = 0.7f;
+            if (p.value > 0.02f) tint = kOrange, amount = std::max(amount * (1 - p.value), 0.25f + 0.6f * p.value);
+            if (p.pressed) tint = kOrange, amount = 0.9f;
+        } else if (d.flash[hand]) {
+            tint = kBlue, amount = 0.35f;  // a vibration was sent: the body flashes
+        }
+        for (const Primitive &prim : node.prims)
+            renderer.draw_mesh(prim.mesh, world[n], prim.color, 0, prim.texture, tint, amount);
+    }
+
+    if (!labels) return;
+    for (size_t i = 0; i < model.components.size(); ++i) {
+        const ModelComponent &mc = model.components[i];
+        if (mc.root < 0 || !cs[i].part.any() || !*part_label(mc.part)) continue;
+        const float *m = world[mc.root].m;
+        Vec3 at = Vec3(m[12], m[13], m[14]) + d.anchor.q.rotate({0, 0.03f, 0.035f});
+        const float c[4] = {1.0f, 0.55f, 0.15f, 1};
+        world_text(tris, Pose(d.anchor.q, at), 0.0024f, part_label(mc.part), c);
     }
 }
 
@@ -96,7 +135,7 @@ void Scene::draw(const Mat4 &view_proj, SceneData &d) {
         const ControllerModel *model = models.get(family, h);
         if (!model) continue;
         if (input.grip_valid[h]) draw_model(*model, h, input.grip[h], 1.0f, false, d, tris);
-        draw_model(*model, h, display_pose(d, h), kModelScale, true, d, tris);
+        draw_model(*model, h, display_pose(d, h), kModelScale, d.labels, d, tris);
         if (input.aim_valid[h]) {
             const Pose &aim = input.aim[h];
             float len = 1.5f, u, v;

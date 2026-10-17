@@ -12,6 +12,7 @@ struct SceneData {
     const Input *input = nullptr;
     Pose anchor;                   // the user's place: models and panel are laid out in front of it
     bool flash[2] = {false, false};  // a vibration was just sent to this hand
+    bool labels = true;              // part names next to the enlarged models
     PanelInfo panel;
 };
 

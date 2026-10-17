@@ -48,9 +48,11 @@ void Mesh::upload(const std::vector<float> &interleaved, const std::vector<uint3
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER, interleaved.size() * sizeof(float), interleaved.data(), GL_STATIC_DRAW);
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), nullptr);
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void *)(3 * sizeof(float)));
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)(3 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)(6 * sizeof(float)));
     glGenBuffers(1, &ibo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(uint32_t), indices.data(), GL_STATIC_DRAW);
@@ -91,6 +93,7 @@ static GLuint program(const char *vs, const char *fs) {
     glAttachShader(p, compile(GL_FRAGMENT_SHADER, fs));
     glBindAttribLocation(p, 0, "a_pos");
     glBindAttribLocation(p, 1, "a_second");
+    glBindAttribLocation(p, 2, "a_uv");
     glLinkProgram(p);
     GLint ok = 0;
     glGetProgramiv(p, GL_LINK_STATUS, &ok);
@@ -105,11 +108,14 @@ static GLuint program(const char *vs, const char *fs) {
 static const char *kLitVs = R"(#version 300 es
 in vec3 a_pos;
 in vec3 a_second;
+in vec2 a_uv;
 uniform mat4 u_mvp;
 uniform mat4 u_model;
 out vec3 v_normal;
+out vec2 v_uv;
 void main() {
     v_normal = mat3(u_model) * a_second;
+    v_uv = a_uv;
     gl_Position = u_mvp * vec4(a_pos, 1.0);
 }
 )";
@@ -117,14 +123,21 @@ void main() {
 static const char *kLitFs = R"(#version 300 es
 precision mediump float;
 in vec3 v_normal;
+in vec2 v_uv;
 uniform vec3 u_color;
 uniform float u_emissive;
+uniform sampler2D u_tex;
+uniform float u_has_tex;
+uniform vec3 u_tint;
+uniform float u_tint_amount;
 out vec4 o_color;
 void main() {
     vec3 n = normalize(v_normal);
     float key = abs(dot(n, normalize(vec3(0.3, 0.8, 0.5))));
-    float fill = abs(dot(n, normalize(vec3(-0.6, -0.2, 0.3)))) * 0.25;
-    vec3 lit = u_color * (0.22 + 0.7 * key + fill);
+    float fill = abs(dot(n, normalize(vec3(-0.6, -0.2, 0.3)))) * 0.3;
+    vec3 base = u_color * mix(vec3(1.0), texture(u_tex, v_uv).rgb, u_has_tex);
+    vec3 lit = base * (0.3 + 0.75 * key + fill);
+    lit = mix(lit, u_tint * (0.55 + 0.45 * key), u_tint_amount);
     o_color = vec4(mix(lit, u_color, u_emissive), 1.0);
 }
 )";
@@ -156,7 +169,7 @@ static void make_sphere(Mesh &mesh) {
         for (int i = 0; i <= nu; ++i) {
             float th = 2 * kPi * i / nu;
             float x = std::cos(ph) * std::cos(th), y = std::sin(ph), z = std::cos(ph) * std::sin(th);
-            v.insert(v.end(), {x, y, z, x, y, z});
+            v.insert(v.end(), {x, y, z, x, y, z, 0, 0});
         }
     }
     for (int j = 0; j < nv; ++j)
@@ -173,6 +186,10 @@ bool Renderer::init() {
     lit_model_ = glGetUniformLocation(lit_, "u_model");
     lit_color_ = glGetUniformLocation(lit_, "u_color");
     lit_emissive_ = glGetUniformLocation(lit_, "u_emissive");
+    lit_tex_ = glGetUniformLocation(lit_, "u_tex");
+    lit_has_tex_ = glGetUniformLocation(lit_, "u_has_tex");
+    lit_tint_ = glGetUniformLocation(lit_, "u_tint");
+    lit_tint_amount_ = glGetUniformLocation(lit_, "u_tint_amount");
     flat_ = program(kFlatVs, kFlatFs);
     flat_mvp_ = glGetUniformLocation(flat_, "u_mvp");
     glGenVertexArrays(1, &flat_vao_);
@@ -190,8 +207,15 @@ bool Renderer::init() {
 
 void Renderer::begin_eye(const Mat4 &view_proj) { view_proj_ = view_proj; }
 
-void Renderer::draw_mesh(const Mesh &mesh, const Mat4 &model, const Vec3 &color, float emissive) {
+void Renderer::draw_mesh(const Mesh &mesh, const Mat4 &model, const Vec3 &color, float emissive, GLuint texture,
+                         const Vec3 &tint, float tint_amount) {
     glUseProgram(lit_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glUniform1i(lit_tex_, 0);
+    glUniform1f(lit_has_tex_, texture ? 1.0f : 0.0f);
+    glUniform3f(lit_tint_, tint.x, tint.y, tint.z);
+    glUniform1f(lit_tint_amount_, tint_amount);
     Mat4 mvp = view_proj_ * model;
     glUniformMatrix4fv(lit_mvp_, 1, GL_FALSE, mvp.m);
     glUniformMatrix4fv(lit_model_, 1, GL_FALSE, model.m);

@@ -22,7 +22,7 @@ struct Profile {
     const char *title;      // registry title
     const char *extension;  // extension that defines the profile, nullptr for core profiles
     int min_minor;          // OpenXR 1.<min_minor> needed (1 = core profile of OpenXR 1.1)
-    const char *family;     // model family (assets/models/<family>_<hand>.glb)
+    const char *family;     // model: WebXR Input Profiles id (assets/webxr/<family>/)
     const Component *components;
     int component_count;
 };
@@ -33,7 +33,7 @@ constexpr int kProfileCount = sizeof(kProfiles) / sizeof(kProfiles[0]);
 
 // The model part an input lights up: the identifier after /input/ with the profile-specific spellings folded
 // together (trigger_curl -> trigger, thumb_fb -> thumbrest, stylus_fb -> stylus, ...). "" for poses and outputs.
-// tools/test_tables.py checks that every bound input has its part in the model.
+// tools/test_tables.py checks the parts against the models' components.
 inline std::string part_for(const char *subpath) {
     if (std::strncmp(subpath, "/input/", 7) != 0) return "";
     std::string id(subpath + 7);

@@ -33,7 +33,9 @@ converter), and on a real Quest as the reference.
 | Touch Plus (OpenXR 1.1) | `/interaction_profiles/meta/touch_plus_controller` | OpenXR 1.1 |
 | Touch Pro (OpenXR 1.1) | `/interaction_profiles/meta/touch_pro_controller` | OpenXR 1.1 |
 
-The inputs of each type come straight from the OpenXR registry (`tools/gen_profiles.py`). Touch also gets the
+The inputs of each type come straight from the OpenXR registry (`tools/gen_profiles.py`). The 3D models are the
+[WebXR Input Profiles](https://github.com/immersive-web/webxr-input-profiles) assets (Oculus Touch, Touch v2 and
+v3, Touch Plus, Touch Pro, Oculus Go), animated the way their profiles describe. Touch also gets the
 proximity inputs of `XR_FB_touch_controller_proximity` when the runtime offers it. Types the runtime can't do are
 greyed out with the reason. Most Quest games use OpenXR 1.0, so the 1.0 types run on an OpenXR 1.0 instance and the
 1.1 types on a 1.1 instance, just as a game would.
@@ -43,9 +45,11 @@ greyed out with the reason. Most Quest games use OpenXR 1.0, so the 1.0 types ru
 - **Pick a controller type:** point at the panel and pull the trigger. If pointing doesn't work with the type you
   picked, hold the thumbstick (or touchpad) click for 2 seconds to go to the next type. If a type gives no
   controller input at all for 10 seconds, the app goes back to the last type that worked.
-- **Read the model:** blue = touched, orange = pressed, an orange fill = analog value (trigger, grip, force), a
-  faint blue = finger near (proximity). The trigger and stick move with your fingers; the touchpad shows where you
-  touch. Dark grey parts aren't bound for this type (for example the Meta/Oculus button, which the system keeps).
+- **Read the model:** blue = touched, orange = pressed, orange that grows with the value = analog input (trigger,
+  grip), a faint blue = finger near (proximity). Buttons go in, the trigger and grip move with your fingers, the
+  stick tilts and the Go touchpad shows where you touch. Darkened parts aren't bound for this type. Inputs the models
+  have no part for (the system button, the left menu button on the newer Touch models, the thumbrest) show in the
+  panel only.
 - **Read the panel:** the runtime's answer to the bindings ("XR_SUCCESS" or the error), the profile the runtime
   says each hand has, and every input with its live value. A `*` marks inputs that have fired; "inactive" means the
   runtime sends nothing for that input.
@@ -67,13 +71,13 @@ Needs JDK 17 and the Android SDK (NDK 27.2.12479018 and CMake 3.22.1 are install
 ```
 ./gradlew assembleRelease           # app/build/outputs/apk/release/
 python3 tools/gen_profiles.py       # regenerate the controller table from the OpenXR registry
-python3 tools/gen_models.py         # regenerate the models (needs numpy)
-python3 tools/test_tables.py        # every input has its part in the model
-python3 tools/preview_models.py     # out/previews/models.png
+python3 tools/fetch_models.py       # copy the controller models from the pinned WebXR Input Profiles package
+python3 tools/test_tables.py        # the models can show every core input of every controller type
 
 # the app's scene on a PC (Mesa EGL): profile index, demo time in seconds, --hands for controllers in view
 cmake -S tools/render_host -B out/render_host && cmake --build out/render_host
 out/render_host/render_host app/src/main/assets out/scene.ppm 0 5.3 --hands
+python3 tools/gen_icon.py           # the app icon, from the renderer's close-up of the Touch model
 ```
 
 Releases are built by GitHub Actions from a `v*` tag matching `versionName` in `app/build.gradle.kts`: the APK, the
@@ -81,8 +85,10 @@ install manifest the button above opens (`frameport-install.json`) and `SHA256SU
 
 ## Licences
 
-The app is MIT-licensed (`LICENSE`). The controller models are generated from simple shapes, are stylised
-look-alikes, not copies of any manufacturer's models, and are CC0. Third-party code: the Khronos OpenXR loader
+The app is MIT-licensed (`LICENSE`). The controller models are from the
+[WebXR Input Profiles](https://github.com/immersive-web/webxr-input-profiles) assets (MIT,
+`app/src/main/assets/webxr/LICENSE.md`); as that project notes, they portray the manufacturers' trademarks to depict
+the devices accurately, and the licence grants no rights to those marks. Third-party code: the Khronos OpenXR loader
 (Apache-2.0, from Maven Central), [cgltf](https://github.com/jkuhlmann/cgltf) (MIT) and
-[stb_easy_font](https://github.com/nothings/stb) (MIT / public domain). Meta Quest, Touch and Oculus are trademarks
+[stb_easy_font / stb_image](https://github.com/nothings/stb) (MIT / public domain). Meta Quest, Touch and Oculus are trademarks
 of Meta Platforms; this project isn't affiliated with Meta.

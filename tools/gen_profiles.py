@@ -18,17 +18,17 @@ REGISTRY_COMMIT = "18ebc0374da23c020ef4c949f9b144ffae6160ef"
 REGISTRY_URL = (f"https://raw.githubusercontent.com/KhronosGroup/OpenXR-Docs/{REGISTRY_COMMIT}"
                 "/specification/registry/xr.xml")
 
-# Menu entries in display order: (profile path, label, model family)
+# Menu entries in display order: (profile path, label, model = WebXR Input Profiles id, see fetch_models.py)
 ENTRIES = [
-    ("/interaction_profiles/oculus/touch_controller", "Touch (most Quest games)", "touch_q2"),
-    ("/interaction_profiles/meta/touch_controller_plus", "Touch Plus (Quest 3/3S)", "plus"),
-    ("/interaction_profiles/facebook/touch_controller_pro", "Touch Pro (Quest Pro)", "pro"),
-    ("/interaction_profiles/oculus/go_controller", "Oculus Go controller", "go"),
-    ("/interaction_profiles/meta/touch_controller_quest_2", "Quest 2 Touch (OpenXR 1.1)", "touch_q2"),
-    ("/interaction_profiles/meta/touch_controller_quest_1_rift_s", "Quest 1 / Rift S Touch (OpenXR 1.1)", "touch_q1"),
-    ("/interaction_profiles/meta/touch_controller_rift_cv1", "Rift CV1 Touch (OpenXR 1.1)", "touch_cv1"),
-    ("/interaction_profiles/meta/touch_plus_controller", "Touch Plus (OpenXR 1.1)", "plus"),
-    ("/interaction_profiles/meta/touch_pro_controller", "Touch Pro (OpenXR 1.1)", "pro"),
+    ("/interaction_profiles/oculus/touch_controller", "Touch (most Quest games)", "oculus-touch-v3"),
+    ("/interaction_profiles/meta/touch_controller_plus", "Touch Plus (Quest 3/3S)", "meta-quest-touch-plus-v2"),
+    ("/interaction_profiles/facebook/touch_controller_pro", "Touch Pro (Quest Pro)", "meta-quest-touch-pro"),
+    ("/interaction_profiles/oculus/go_controller", "Oculus Go controller", "oculus-go"),
+    ("/interaction_profiles/meta/touch_controller_quest_2", "Quest 2 Touch (OpenXR 1.1)", "oculus-touch-v3"),
+    ("/interaction_profiles/meta/touch_controller_quest_1_rift_s", "Quest 1 / Rift S Touch (OpenXR 1.1)", "oculus-touch-v2"),
+    ("/interaction_profiles/meta/touch_controller_rift_cv1", "Rift CV1 Touch (OpenXR 1.1)", "oculus-touch"),
+    ("/interaction_profiles/meta/touch_plus_controller", "Touch Plus (OpenXR 1.1)", "meta-quest-touch-plus-v2"),
+    ("/interaction_profiles/meta/touch_pro_controller", "Touch Pro (OpenXR 1.1)", "meta-quest-touch-pro"),
 ]
 # Extensions whose extra inputs on a profile are bound when the runtime offers them
 OPTIONAL_EXTENSIONS = {"XR_FB_touch_controller_proximity"}

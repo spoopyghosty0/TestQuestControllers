@@ -40,6 +40,14 @@ struct Quat {
         return v + t * w + cross(u, t);
     }
     Quat conjugate() const { return {-x, -y, -z, w}; }
+    // Normalised linear interpolation (the short way round): fine for the small angles of button travel.
+    static Quat nlerp(const Quat &a, const Quat &b, float t) {
+        float d = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w, s = d < 0 ? -1.0f : 1.0f;
+        Quat q(a.x + (s * b.x - a.x) * t, a.y + (s * b.y - a.y) * t, a.z + (s * b.z - a.z) * t,
+               a.w + (s * b.w - a.w) * t);
+        float l = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+        return l > 0 ? Quat(q.x / l, q.y / l, q.z / l, q.w / l) : a;
+    }
     static Quat axis_angle(const Vec3 &axis, float radians) {
         Vec3 a = normalize(axis);
         float s = std::sin(radians * 0.5f);
@@ -108,6 +116,11 @@ struct Mat4 {
         r.m[8] = cz.x, r.m[9] = cz.y, r.m[10] = cz.z;
         r.m[12] = p.p.x, r.m[13] = p.p.y, r.m[14] = p.p.z;
         return r;
+    }
+    static Mat4 from_trs(const Quat &r, const Vec3 &t, const Vec3 &s) {
+        Mat4 m = from_pose(Pose(r, t));
+        for (int k = 0; k < 3; ++k) m.m[k] *= s.x, m.m[4 + k] *= s.y, m.m[8 + k] *= s.z;
+        return m;
     }
     // Projection for an OpenXR field of view (GL clip space, z in -1..1).
     static Mat4 projection(const XrFovf &fov, float near_z, float far_z) {

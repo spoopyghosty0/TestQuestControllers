@@ -55,6 +55,11 @@ android {
         }
     }
 
+    lint {
+        // Quest apps target API 32; this one is never published on Google Play
+        disable += "ExpiredTargetSdkVersion"
+    }
+
     packaging {
         jniLibs {
             useLegacyPackaging = true
