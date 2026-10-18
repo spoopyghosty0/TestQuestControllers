@@ -36,5 +36,5 @@ Releases: tag `vX.Y.Z` matching `versionName` in `app/build.gradle.kts`.
 
 ## Licence
 
-MIT. Controller models: [WebXR Input Profiles](https://github.com/immersive-web/webxr-input-profiles) (MIT). Not
-affiliated with Meta.
+MIT. Controller models: [WebXR Input Profiles](https://github.com/immersive-web/webxr-input-profiles) (MIT). Font:
+[Go fonts](https://go.dev/blog/go-fonts) (BSD-style, `app/src/main/assets/fonts/LICENSE`). Not affiliated with Meta.
