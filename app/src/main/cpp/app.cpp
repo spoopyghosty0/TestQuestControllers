@@ -110,6 +110,10 @@ private:
 
     bool cycle_ = false;
     double last_cycle_ = 0;
+    int switching_to_ = -1;        // controller type to switch to once the current session has ended
+    double switch_started_ = 0;
+    bool pending_finish_ = false;  // the session ended: make the new one (outside the event loop)
+    void finish_switch();
     void load_choice();
     void save_choice();
     bool init_loader();
@@ -407,8 +411,26 @@ void App::switch_to(int index) {
         message_ = std::string(kProfiles[index].label) + " needs OpenXR 1.1; this run has a 1.0 instance";
         return;
     }
-    close_session();
     (void)from;
+    // A running session is ended the way OpenXR expects (request exit -> STOPPING -> xrEndSession -> IDLE/EXITING)
+    // before it's destroyed: destroyed while running, SteamVR kept treating it as the app's session and gave the new
+    // one ~0.4 fps (the picture froze after every switch). finish_switch() makes the new session once it ended.
+    switching_to_ = index;
+    if (session_ && running_) {
+        switch_started_ = now_s();
+        XrResult r = xrRequestExitSession(session_);
+        LOGI("switch: ending the session first -> %s", result_name(instance_, r));
+        if (XR_SUCCEEDED(r)) return;
+    }
+    finish_switch();
+}
+
+void App::finish_switch() {
+    int index = switching_to_;
+    switching_to_ = -1;
+    pending_finish_ = false;
+    if (index < 0) return;
+    close_session();
     current_ = index;
     update_statuses();
     if (!open_session(current_)) {
@@ -457,7 +479,16 @@ void App::handle_state(XrSessionState s) {
         case XR_SESSION_STATE_FOCUSED:
             focused_since_ = now_s();
             break;
+        case XR_SESSION_STATE_IDLE:
+            if (switching_to_ >= 0 && !running_) pending_finish_ = true;  // ended for a switch: make the new one
+            break;
         case XR_SESSION_STATE_EXITING:
+            if (switching_to_ >= 0) {  // the exit asked for to switch controller types, not the user's
+                pending_finish_ = true;
+                break;
+            }
+            exit_ = true;
+            break;
         case XR_SESSION_STATE_LOSS_PENDING:
             exit_ = true;
             break;
@@ -760,9 +791,14 @@ void App::run() {
             continue;
         }
         poll_events();
+        if (switching_to_ >= 0 && (pending_finish_ || now_s() - switch_started_ > 3)) {
+            if (!pending_finish_) LOGW("switch: the session didn't end within 3 s; replacing it anyway");
+            finish_switch();
+            continue;
+        }
         // debug: a file named "cycle" in the app's files folder switches the controller type every 8 s (to test
         // switching on a headset nobody wears)
-        if (cycle_ && running_ && pending_ < 0 && now_s() - last_cycle_ > 8) {
+        if (cycle_ && running_ && pending_ < 0 && switching_to_ < 0 && now_s() - last_cycle_ > 8) {
             last_cycle_ = now_s();
             for (int k = 1; k <= kProfileCount; ++k) {
                 int next = (current_ + k) % kProfileCount;
@@ -772,7 +808,7 @@ void App::run() {
                 }
             }
         }
-        if (pending_ >= 0) {
+        if (pending_ >= 0 && switching_to_ < 0) {
             int next = pending_;
             pending_ = -1;
             switch_to(next);
