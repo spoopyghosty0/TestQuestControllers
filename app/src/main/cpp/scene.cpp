@@ -4,7 +4,10 @@
 #include <cmath>
 
 namespace {
-const Vec3 kOrange(1.0f, 0.36f, 0.03f), kBlue(0.08f, 0.32f, 1.0f), kNear(0.03f, 0.08f, 0.25f);
+// touched = blue, pressed = orange, pulled (trigger/grip value) = yellow that deepens with the pull; the panel's
+// legend (ui.cpp) uses the same colours
+const Vec3 kOrange(1.0f, 0.3f, 0.02f), kBlue(0.06f, 0.36f, 1.0f), kYellow(1.0f, 0.78f, 0.05f),
+    kNear(0.03f, 0.08f, 0.25f);
 
 // layout, in the anchor's frame (metres; the user looks along -Z)
 const Vec3 kModelLeft(-0.34f, -0.07f, -0.66f), kModelRight(-0.08f, -0.07f, -0.66f);
@@ -105,9 +108,13 @@ void Scene::draw_model(const ControllerModel &model, int hand, const Pose &base,
             const PartState &p = c.part;
             if (!c.bound && !input.demo) tint = Vec3(0.01f, 0.01f, 0.012f), amount = 0.6f;
             if (p.near) tint = kNear, amount = 0.45f;
-            if (p.touched) tint = kBlue, amount = 0.7f;
-            if (p.value > 0.02f) tint = kOrange, amount = std::max(amount * (1 - p.value), 0.25f + 0.6f * p.value);
-            if (p.pressed) tint = kOrange, amount = 0.9f;
+            if (p.touched) tint = kBlue, amount = 0.75f;
+            if (p.value > 0.02f) {  // yellow from the first millimetre, orange at a full pull
+                float v = std::min(1.0f, p.value);
+                tint = kYellow * (1 - v * v) + kOrange * (v * v);
+                amount = 0.45f + 0.5f * v;
+            }
+            if (p.pressed) tint = kOrange, amount = 1.0f;
         } else if (d.flash[hand]) {
             tint = kBlue, amount = 0.35f;  // a vibration was sent: the body flashes
         }

@@ -162,6 +162,13 @@ void Panel::build(const PanelInfo &info, std::vector<FlatVertex> &t) {
             col_y[h] += 11;
         }
         y = std::max(col_y[0], col_y[1]) + 6;
+        // colour legend, the same colours as the model highlights (scene.cpp)
+        const float touch_c[4] = {0.15f, 0.5f, 1.0f, 1}, press_c[4] = {1.0f, 0.42f, 0.08f, 1},
+                    pull_c[4] = {1.0f, 0.82f, 0.15f, 1};
+        float x = text(t, 16, y, 1.2f, "Touched", touch_c);
+        x = text(t, x + 14, y, 1.2f, "Pressed", press_c);
+        text(t, x + 14, y, 1.2f, "Pulled", pull_c);
+        y += 15;
         text(t, 16, y, 1, "* = has fired.  Inactive = the runtime sends nothing for it.", kDim);
         y += 12;
         if (!info.input->skipped_notes.empty()) {

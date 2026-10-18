@@ -532,13 +532,14 @@ void App::update_haptics(int h, double t) {
         std::string out = input_.haptic_output_for(part);
         bool sent = false;
         if (haptics_) {
-            if (st.pressed && !tr.pressed) sent = XR_SUCCEEDED(input_.haptic(session_, h, 0.6f, 0.06f, out));
+            // a press is a strong, clear kick; a touch only a faint tick
+            if (st.pressed && !tr.pressed) sent = XR_SUCCEEDED(input_.haptic(session_, h, 1.0f, 0.08f, out));
             else if ((st.touched || st.near) && !tr.touched && !st.pressed)
-                sent = XR_SUCCEEDED(input_.haptic(session_, h, 0.15f, 0.015f, out));
+                sent = XR_SUCCEEDED(input_.haptic(session_, h, 0.05f, 0.01f, out));
             bool analog = part == "trigger" || part == "squeeze";
             if (analog && st.value > 0.05f && t - tr.last_rumble > 0.08) {
                 // refreshed every 80 ms for 100 ms: a continuous rumble as strong as the pull
-                sent = XR_SUCCEEDED(input_.haptic(session_, h, 0.15f + 0.75f * st.value, 0.1f, out)) || sent;
+                sent = XR_SUCCEEDED(input_.haptic(session_, h, 0.05f + 0.9f * st.value, 0.1f, out)) || sent;
                 tr.last_rumble = t;
             }
         }
