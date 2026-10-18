@@ -1,11 +1,11 @@
 {
   "schema": "framedrop.install/v1",
   "name": "Test Quest Controllers",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "files": [
     {
-      "url": "https://github.com/spoopyghosty0/TestQuestControllers/releases/download/v0.2.0/TestQuestControllers-0.2.0.apk",
-      "sha256": "8c01ab6e01183abbbfe6e98377dafce27c53163c929afc2aefc1c87f05bc2402"
+      "url": "https://github.com/spoopyghosty0/TestQuestControllers/releases/download/v0.2.1/TestQuestControllers-0.2.1.apk",
+      "sha256": "5f8d49fe4c19a975edb416bbcf674ecabf7374bacad3fc88a785d5f4fc0f0f99"
     }
   ],
   "frameport": {
