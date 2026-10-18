@@ -61,7 +61,44 @@ struct Swap {
     std::vector<XrSwapchainImageOpenGLESKHR> images;
     EyeTarget target;
     int width = 0, height = 0;
+    bool create(XrSession session, int64_t format, int w, int h, bool with_depth);
+    void destroy();
 };
+
+bool Swap::create(XrSession session, int64_t format, int w, int h, bool with_depth) {
+    XrSwapchainCreateInfo sc{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    sc.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+    sc.format = format;
+    sc.sampleCount = 1;
+    sc.width = (uint32_t)w;
+    sc.height = (uint32_t)h;
+    sc.faceCount = 1;
+    sc.arraySize = 1;
+    sc.mipCount = 1;
+    XrResult r = xrCreateSwapchain(session, &sc, &handle);
+    if (XR_FAILED(r)) {
+        LOGE("xrCreateSwapchain %dx%d -> %d", w, h, r);
+        handle = XR_NULL_HANDLE;
+        return false;
+    }
+    width = w;
+    height = h;
+    uint32_t n = 0;
+    xrEnumerateSwapchainImages(handle, 0, &n, nullptr);
+    images.assign(n, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
+    xrEnumerateSwapchainImages(handle, n, &n, (XrSwapchainImageBaseHeader *)images.data());
+    std::vector<GLuint> tex;
+    for (const auto &img : images) tex.push_back(img.image);
+    target.create(tex, width, height, with_depth);
+    return true;
+}
+
+void Swap::destroy() {
+    target.release();
+    if (handle) xrDestroySwapchain(handle);
+    handle = XR_NULL_HANDLE;
+    images.clear();
+}
 
 class App {
 public:
@@ -85,6 +122,11 @@ private:
     std::vector<XrViewConfigurationView> view_configs_;
     Swap swaps_[2];
     int64_t color_format_ = 0;
+    uint32_t max_swapchain_width_ = 4096;
+    // The panel: its own swapchain (both eyes' images side by side) shown as two quad layers, one per eye. Where
+    // that fails, panel_image_ is drawn into the scene instead.
+    Swap panel_swap_;
+    RenderTexture panel_image_;
 
     Input input_;
     int current_ = 0, last_good_ = 0, pending_ = -1;
@@ -132,7 +174,9 @@ private:
     void frame();
     void update_ui(XrTime time);
     void place(XrTime time);
-    void render_eye(const XrView &view, int eye, uint32_t image);
+    SceneData scene_data();
+    void render_eye(const XrView &view, int eye, uint32_t image, SceneData &d);
+    void render_panel(const XrView views[2], SceneData &d, XrCompositionLayerQuad quads[2]);
     XrSession session() const { return session_; }
 };
 
@@ -285,6 +329,7 @@ bool App::open_instance(int minor) {
     XrSystemProperties sp{XR_TYPE_SYSTEM_PROPERTIES};
     xrGetSystemProperties(instance_, system_, &sp);
     system_name_ = sp.systemName;
+    if (sp.graphicsProperties.maxSwapchainImageWidth) max_swapchain_width_ = sp.graphicsProperties.maxSwapchainImageWidth;
     LOGI("runtime: %s, system: %s", runtime_.c_str(), system_name_.c_str());
 
     PFN_xrGetOpenGLESGraphicsRequirementsKHR reqs = nullptr;
@@ -341,31 +386,23 @@ bool App::open_session(int index) {
     color_format_ = formats.empty() ? GL_SRGB8_ALPHA8 : formats[0];
     for (int64_t f : formats)
         if (f == GL_SRGB8_ALPHA8) color_format_ = f;
-    for (int eye = 0; eye < 2; ++eye) {
-        Swap &s = swaps_[eye];
-        XrSwapchainCreateInfo sc{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-        sc.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-        sc.format = color_format_;
-        sc.sampleCount = 1;
-        sc.width = view_configs_[eye].recommendedImageRectWidth;
-        sc.height = view_configs_[eye].recommendedImageRectHeight;
-        sc.faceCount = 1;
-        sc.arraySize = 1;
-        sc.mipCount = 1;
-        r = xrCreateSwapchain(session_, &sc, &s.handle);
-        if (XR_FAILED(r)) {
-            LOGE("xrCreateSwapchain -> %s", result_name(instance_, r));
+    for (int eye = 0; eye < 2; ++eye)
+        if (!swaps_[eye].create(session_, color_format_, (int)view_configs_[eye].recommendedImageRectWidth,
+                                (int)view_configs_[eye].recommendedImageRectHeight, true))
             return false;
+    {
+        // ~2 texels per panel pixel = about one texel per display pixel at the panel's distance on Quest 3 / the
+        // Steam Frame (~25 pixels per degree; 1120 texels over the panel's ~42 degrees)
+        Panel &panel = scene_.panel;
+        panel.texel_scale = std::min(2.0f, (float)max_swapchain_width_ / (2 * panel.width));
+        if (!panel_swap_.create(session_, color_format_, 2 * panel.image_width(), panel.image_height(), false)) {
+            LOGW("no swapchain for the panel: drawing it into the scene");
+            int levels = 1;
+            while ((panel.image_width() >> levels) > 0 && levels < 8) ++levels;
+            panel_image_.create(panel.image_width(), panel.image_height(), levels);
+        } else {
+            LOGI("panel layer %dx%d per eye", panel.image_width(), panel.image_height());
         }
-        s.width = (int)sc.width;
-        s.height = (int)sc.height;
-        uint32_t n = 0;
-        xrEnumerateSwapchainImages(s.handle, 0, &n, nullptr);
-        s.images.assign(n, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
-        xrEnumerateSwapchainImages(s.handle, n, &n, (XrSwapchainImageBaseHeader *)s.images.data());
-        std::vector<GLuint> tex;
-        for (const auto &img : s.images) tex.push_back(img.image);
-        s.target.create(tex, s.width, s.height);
     }
     input_.attach(session_);
     {
@@ -396,12 +433,9 @@ void App::close_session() {
     stop_passthrough();
     passthrough_wanted_ = wanted;
     input_.destroy();
-    for (auto &s : swaps_) {
-        s.target.release();
-        if (s.handle) xrDestroySwapchain(s.handle);
-        s.handle = XR_NULL_HANDLE;
-        s.images.clear();
-    }
+    for (auto &s : swaps_) s.destroy();
+    panel_swap_.destroy();
+    panel_image_.release();
     if (local_) xrDestroySpace(local_);
     if (view_) xrDestroySpace(view_);
     local_ = view_ = XR_NULL_HANDLE;
@@ -659,18 +693,7 @@ void App::update_ui(XrTime time) {
     }
 }
 
-void App::render_eye(const XrView &view, int eye, uint32_t image) {
-    Swap &s = swaps_[eye];
-    glBindFramebuffer(GL_FRAMEBUFFER, s.target.fbos[image]);
-    glViewport(0, 0, s.width, s.height);
-    glEnable(GL_DEPTH_TEST);
-    glDisable(GL_CULL_FACE);
-    glEnable(GL_BLEND);
-    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-    if (passthrough_mode_.empty()) glClearColor(kClearColor[0], kClearColor[1], kClearColor[2], 1);
-    else glClearColor(0, 0, 0, 0);  // the real world shows through
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
+SceneData App::scene_data() {
     SceneData d;
     d.current = current_;
     d.input = &input_;
@@ -690,9 +713,55 @@ void App::render_eye(const XrView &view, int eye, uint32_t image) {
     for (const auto &hr : input_.haptic_results)
         d.panel.haptic_result += (d.panel.haptic_result.empty() ? "" : ", ") + hr.first.substr(8) + " " + hr.second;
     d.panel.hover_item = hover_;
+    scene_.update_cursors(d);
+    return d;
+}
+
+void App::render_eye(const XrView &view, int eye, uint32_t image, SceneData &d) {
+    Swap &s = swaps_[eye];
+    glBindFramebuffer(GL_FRAMEBUFFER, s.target.fbos[image]);
+    glViewport(0, 0, s.width, s.height);
+    glEnable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    if (passthrough_mode_.empty()) glClearColor(kClearColor[0], kClearColor[1], kClearColor[2], 1);
+    else glClearColor(0, 0, 0, 0);  // the real world shows through
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     Mat4 view_m = Mat4::from_pose(Pose(view.pose).inverse());
-    scene_.draw(Mat4::projection(view.fov, 0.05f, 50.0f) * view_m, d);
+    scene_.draw(Mat4::projection(view.fov, 0.05f, 50.0f) * view_m, d, panel_image_.texture);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// The panel's quad layers: each eye's half of the panel swapchain gets the panel plus what that eye sees in front
+// of it (a quad layer always covers the projection layer).
+void App::render_panel(const XrView views[2], SceneData &d, XrCompositionLayerQuad quads[2]) {
+    uint32_t image = 0;
+    XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    xrAcquireSwapchainImage(panel_swap_.handle, &ai, &image);
+    XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    wi.timeout = XR_INFINITE_DURATION;
+    xrWaitSwapchainImage(panel_swap_.handle, &wi);
+    glBindFramebuffer(GL_FRAMEBUFFER, panel_swap_.target.fbos[image]);
+    const Panel &panel = scene_.panel;
+    int w = panel.image_width(), h = panel.image_height();
+    for (int eye = 0; eye < 2; ++eye) {
+        Vec3 at(views[eye].pose.position);
+        scene_.draw_panel(d, eye * w, &at);
+        XrCompositionLayerQuad &q = quads[eye];
+        q = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+        q.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;  // premultiplied (the default)
+        q.space = local_;
+        q.eyeVisibility = eye == 0 ? XR_EYE_VISIBILITY_LEFT : XR_EYE_VISIBILITY_RIGHT;
+        q.subImage.swapchain = panel_swap_.handle;
+        q.subImage.imageRect = {{eye * w, 0}, {w, h}};
+        q.pose.orientation = {panel.pose.q.x, panel.pose.q.y, panel.pose.q.z, panel.pose.q.w};
+        q.pose.position = {panel.pose.p.x, panel.pose.p.y, panel.pose.p.z};
+        q.size = {panel.width * panel.px, panel.height * panel.px};
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    xrReleaseSwapchainImage(panel_swap_.handle, &ri);
 }
 
 void App::frame() {
@@ -706,7 +775,9 @@ void App::frame() {
     XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
     XrCompositionLayerPassthroughFB pt_layer{XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB};
     pt_layer.layerHandle = pt_layer_;
-    const XrCompositionLayerBaseHeader *layers[2];
+    XrCompositionLayerQuad quads[2];
+    bool panel_layer = false;
+    const XrCompositionLayerBaseHeader *layers[4];
     uint32_t layer_count = 0;
     bool rendered = false;
 
@@ -722,6 +793,14 @@ void App::frame() {
             input_.sync(session_, local_, fs.predictedDisplayTime);
             if (!placed_) place(fs.predictedDisplayTime);
             update_ui(fs.predictedDisplayTime);
+            SceneData d = scene_data();
+            if (panel_image_.texture) {  // no panel layer: the panel's image for the scene, mipmapped
+                glBindFramebuffer(GL_FRAMEBUFFER, panel_image_.fbo);
+                scene_.draw_panel(d, 0, nullptr);
+                glBindTexture(GL_TEXTURE_2D, panel_image_.texture);
+                glGenerateMipmap(GL_TEXTURE_2D);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            }
             for (int eye = 0; eye < 2; ++eye) {
                 Swap &s = swaps_[eye];
                 uint32_t image = 0;
@@ -730,7 +809,7 @@ void App::frame() {
                 XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
                 wi.timeout = XR_INFINITE_DURATION;
                 xrWaitSwapchainImage(s.handle, &wi);
-                render_eye(views[eye], eye, image);
+                render_eye(views[eye], eye, image, d);
                 XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
                 xrReleaseSwapchainImage(s.handle, &ri);
                 proj[eye].pose = views[eye].pose;
@@ -745,6 +824,10 @@ void App::frame() {
             layer.viewCount = 2;
             layer.views = proj.data();
             rendered = true;
+            if (panel_swap_.handle) {
+                render_panel(views, d, quads);
+                panel_layer = true;
+            }
         }
     }
     XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
@@ -753,6 +836,8 @@ void App::frame() {
         passthrough_mode_ == "ALPHA_BLEND" ? XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND : XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     if (pt_layer_) layers[layer_count++] = (const XrCompositionLayerBaseHeader *)&pt_layer;  // under the scene
     if (rendered) layers[layer_count++] = (const XrCompositionLayerBaseHeader *)&layer;
+    if (panel_layer)  // above the scene
+        for (auto &q : quads) layers[layer_count++] = (const XrCompositionLayerBaseHeader *)&q;
     end.layerCount = layer_count;
     end.layers = layer_count ? layers : nullptr;
     XrResult r = xrEndFrame(session_, &end);

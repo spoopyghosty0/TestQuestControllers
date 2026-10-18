@@ -1,13 +1,16 @@
 // Renders the app's scene on a PC (Mesa, surfaceless EGL) to check layout and highlighting without a headset.
 //
-//   render_host <assets dir> <out.ppm> [profile index] [demo seconds] [--hands | --icon]
+//   render_host <assets dir> <out.ppm> [profile index] [demo seconds] [--hands | --icon | --panel]
 //
 // Uses the app's own scene, model and panel code; OpenXR calls are stubbed (xr_stubs.cpp) and demo mode lights the
-// parts. --hands also places both controllers in front of the user, the right one pointing at the panel.
+// parts. --hands also places both controllers in front of the user, the right one pointing at the panel. The panel is
+// drawn into its own image and composited over the scene the way a runtime shows the app's quad layer; --panel
+// (implies --hands) writes that image instead, texel for texel.
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES3/gl3.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -26,7 +29,8 @@ int main(int argc, char **argv) {
     std::string assets = argv[1], out = argv[2];
     int profile = argc > 3 ? std::atoi(argv[3]) : 0;
     double clock = argc > 4 ? std::atof(argv[4]) : 0.2;
-    bool hands = argc > 5 && std::strcmp(argv[5], "--hands") == 0;
+    bool panel_only = argc > 5 && std::strcmp(argv[5], "--panel") == 0;
+    bool hands = argc > 5 && (std::strcmp(argv[5], "--hands") == 0 || panel_only);
     bool icon = argc > 5 && std::strcmp(argv[5], "--icon") == 0;  // close-up of the left model, for the app icon
     if (profile < 0 || profile >= kProfileCount) profile = 0;
 
@@ -122,7 +126,40 @@ int main(int argc, char **argv) {
         glClearColor(0, 0, 0, 0);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     }
-    scene.draw(Mat4::projection(fov, 0.05f, 50.0f) * view, d);
+    Mat4 view_proj = Mat4::projection(fov, 0.05f, 50.0f) * view;
+    scene.update_cursors(d);
+    scene.draw(view_proj, d);
+    if (!icon) {
+        // the panel's quad layer: its image as the app makes it for this eye, then composited (mipmapped)
+        RenderTexture image;
+        int levels = 1;
+        while ((scene.panel.image_width() >> levels) > 0 && levels < 8) ++levels;
+        image.create(scene.panel.image_width(), scene.panel.image_height(), levels);
+        glBindFramebuffer(GL_FRAMEBUFFER, image.fbo);
+        Vec3 eye(0, 0, 0);  // the camera (view = identity)
+        scene.draw_panel(d, 0, &eye);
+        glBindTexture(GL_TEXTURE_2D, image.texture);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        if (panel_only) {
+            int pw = image.width, ph = image.height;
+            std::vector<unsigned char> px(pw * ph * 4);
+            glReadPixels(0, 0, pw, ph, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+            std::ofstream f(out, std::ios::binary);
+            f << "P6\n" << pw << " " << ph << "\n255\n";
+            // premultiplied: shown over the scene's background colour (sRGB-encoded)
+            const unsigned char bg[3] = {60, 63, 72};
+            for (int y = ph - 1; y >= 0; --y)
+                for (int x = 0; x < pw; ++x) {
+                    const unsigned char *p = &px[(y * pw + x) * 4];
+                    for (int c = 0; c < 3; ++c) f.put((char)std::min(255, p[c] + bg[c] * (255 - p[3]) / 255));
+                }
+            std::printf("wrote %s (the panel's image, %dx%d)\n", out.c_str(), pw, ph);
+            return 0;
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glViewport(0, 0, w, h);
+        scene.composite_panel(view_proj, image.texture);
+    }
 
     std::vector<unsigned char> px(w * h * 4);
     glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());

@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "log.h"
+
 namespace {
 // touched = blue, pressed = orange, pulled (trigger/grip value) = yellow that deepens with the pull; the panel's
 // legend (ui.cpp) uses the same colours
@@ -50,7 +52,7 @@ void walk(const ControllerModel &m, const std::vector<NodeState> &st, int n, con
 }  // namespace
 
 void Scene::draw_model(const ControllerModel &model, int hand, const Pose &base, float scale, bool labels,
-                       const SceneData &d, std::vector<FlatVertex> &tris) {
+                       const SceneData &d, std::vector<TexVertex> &tris) {
     const Input &input = *d.input;
     // each component's input state (WebXR terms: state default/touched/pressed, button value, axes)
     struct CompState {
@@ -129,38 +131,137 @@ void Scene::draw_model(const ControllerModel &model, int hand, const Pose &base,
         const float *m = world[mc.root].m;
         Vec3 at = Vec3(m[12], m[13], m[14]) + d.anchor.q.rotate({0, 0.03f, 0.035f});
         const float c[4] = {1.0f, 0.55f, 0.15f, 1};
-        world_text(tris, Pose(d.anchor.q, at), 0.0024f, part_label(mc.part), c);
+        world_text(font, tris, Pose(d.anchor.q, at), 0.022f, part_label(mc.part), c);
     }
 }
 
-void Scene::draw(const Mat4 &view_proj, SceneData &d) {
-    renderer.begin_eye(view_proj);
-    std::vector<FlatVertex> tris, lines;
+void Scene::ensure_font() {
+    if (font_tried_) return;
+    font_tried_ = true;
+    std::vector<uint8_t> regular, medium;
+    const ModelCache::Reader &read = models.reader();
+    if (!read || !read("fonts/Go-Regular.ttf", regular)) {
+        LOGE("font missing: fonts/Go-Regular.ttf");
+        return;
+    }
+    read("fonts/Go-Medium.ttf", medium);
+    font.load(std::move(regular), std::move(medium));
+}
+
+void Scene::update_cursors(SceneData &d) const {
+    d.panel.cursors.clear();
+    if (d.only_hand >= 0) return;
+    for (int h = 0; h < 2; ++h) {
+        float u, v;
+        Vec3 hit;
+        if (d.input->aim_valid[h] && panel.hit(d.input->aim[h], u, v, hit)) d.panel.cursors.push_back({u, v, h});
+    }
+}
+
+void Scene::draw_models(SceneData &d, bool labels, std::vector<TexVertex> &tris) {
     const Input &input = *d.input;
     const char *family = kProfiles[d.current].family;
     for (int h = 0; h < 2; ++h) {
         const ControllerModel *model = models.get(family, h);
         if (!model || (d.only_hand >= 0 && h != d.only_hand)) continue;
         if (input.grip_valid[h]) draw_model(*model, h, input.grip[h], 1.0f, false, d, tris);
-        draw_model(*model, h, display_pose(d, h), kModelScale, d.labels, d, tris);
-        if (input.aim_valid[h]) {
-            const Pose &aim = input.aim[h];
-            float len = 1.5f, u, v;
-            Vec3 hit;
-            if (panel.hit(aim, u, v, hit)) {
-                len = length(hit - aim.p);
-                renderer.draw_mesh(renderer.sphere, Mat4::from_pose(Pose(Quat(), hit), 0.006f), {1.0f, 0.5f, 0.1f},
-                                   1.0f);
-            }
-            Vec3 a = aim.p, b = aim.apply({0, 0, -len});
-            float r = h == 0 ? 0.3f : 1.0f, g = h == 0 ? 0.6f : 0.5f, bl = h == 0 ? 1.0f : 0.1f;
-            lines.push_back({a.x, a.y, a.z, r, g, bl, 0.9f});
-            lines.push_back({b.x, b.y, b.z, r, g, bl, 0.15f});
-        }
+        draw_model(*model, h, display_pose(d, h), kModelScale, labels && d.labels, d, tris);
     }
+}
+
+void Scene::draw_rays(const SceneData &d) {
+    std::vector<FlatVertex> lines;
+    for (int h = 0; h < 2; ++h) {
+        if (!d.input->aim_valid[h] || (d.only_hand >= 0 && h != d.only_hand)) continue;
+        const Pose &aim = d.input->aim[h];
+        float len = 1.5f, u, v;
+        Vec3 hit;
+        if (panel.hit(aim, u, v, hit)) len = length(hit - aim.p);  // ends on the panel's cursor
+        Vec3 a = aim.p, b = aim.apply({0, 0, -len});
+        float r = h == 0 ? 0.3f : 1.0f, g = h == 0 ? 0.6f : 0.5f, bl = h == 0 ? 1.0f : 0.1f;
+        lines.push_back({a.x, a.y, a.z, r, g, bl, 0.9f});
+        lines.push_back({b.x, b.y, b.z, r, g, bl, 0.15f});
+    }
+    renderer.draw_lines(lines);
+}
+
+static void standard_blend() {
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+}
+
+void Scene::draw(const Mat4 &view_proj, SceneData &d, GLuint panel_image) {
+    ensure_font();
     d.panel.input = d.input;
     d.panel.current = d.current;
-    renderer.draw_lines(lines);
-    if (d.only_hand < 0) panel.build(d.panel, tris);  // the panel last: it's partly transparent
-    renderer.draw_flat(tris);
+    renderer.begin_eye(view_proj);
+    std::vector<TexVertex> labels;
+    draw_models(d, true, labels);
+    draw_rays(d);
+    if (panel_image && d.only_hand < 0) draw_panel_quad(panel_image);  // no quad layer: in the scene
+    if (font.loaded()) renderer.draw_text(labels, font.texture());
+}
+
+void Scene::draw_panel_quad(GLuint image) {
+    // the panel's image (premultiplied alpha) as a textured quad, mipmapped
+    float hw = panel.width * panel.px / 2, hh = panel.height * panel.px / 2;
+    const Vec3 c[4] = {panel.pose.apply({-hw, hh, 0}), panel.pose.apply({hw, hh, 0}), panel.pose.apply({hw, -hh, 0}),
+                       panel.pose.apply({-hw, -hh, 0})};
+    const float uv[4][2] = {{0, 1}, {1, 1}, {1, 0}, {0, 0}};  // the image's first row is its bottom (GL)
+    std::vector<TexVertex> quad;
+    for (int k : {0, 1, 2, 0, 2, 3}) quad.push_back({c[k].x, c[k].y, c[k].z, uv[k][0], uv[k][1], 1, 1, 1, 1});
+    glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    renderer.draw_image(quad, image);
+    standard_blend();
+}
+
+void Scene::composite_panel(const Mat4 &view_proj, GLuint image) {
+    renderer.begin_eye(view_proj);
+    glDisable(GL_DEPTH_TEST);  // a quad layer covers the projection layer
+    draw_panel_quad(image);
+    glEnable(GL_DEPTH_TEST);
+}
+
+void Scene::draw_panel(SceneData &d, int x, const Vec3 *eye) {
+    ensure_font();
+    d.panel.input = d.input;
+    d.panel.current = d.current;
+    int w = panel.image_width(), h = panel.image_height();
+    glViewport(x, 0, w, h);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(x, 0, w, h);
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    // drawn over a transparent clear, this leaves premultiplied colour, which is what a layer expects
+    standard_blend();
+    if (!font.loaded()) return;
+    std::vector<TexVertex> tris;
+    panel.build(d.panel, font, tris);
+    // image texels, y down -> clip space
+    Mat4 ortho = Mat4::identity();
+    ortho.m[0] = 2.0f / w;
+    ortho.m[5] = -2.0f / h;
+    ortho.m[12] = -1;
+    ortho.m[13] = 1;
+    renderer.begin_eye(ortho);
+    renderer.draw_text(tris, font.texture());
+
+    if (!eye) return;
+    // what's in front of the panel as this eye sees it: a frustum from the eye through the panel's rectangle that
+    // ends at the panel (whatever is behind it is hidden by the panel anyway)
+    Vec3 le = panel.pose.inverse().apply(*eye);
+    if (le.z < 0.05f) return;
+    float hw = panel.width * panel.px / 2, hh = panel.height * panel.px / 2;
+    XrFovf fov{std::atan((-hw - le.x) / le.z), std::atan((hw - le.x) / le.z), std::atan((hh - le.y) / le.z),
+               std::atan((-hh - le.y) / le.z)};
+    Mat4 view = Mat4::from_pose(Pose(panel.pose.q, *eye).inverse());
+    renderer.begin_eye(Mat4::projection(fov, 0.02f, le.z) * view);
+    glBlendFunc(GL_ZERO, GL_ZERO);  // a model in front of the panel: transparent there, so it shows
+    std::vector<TexVertex> unused;
+    draw_models(d, false, unused);
+    standard_blend();
+    draw_rays(d);
 }

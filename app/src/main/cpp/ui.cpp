@@ -6,7 +6,6 @@
 #include <cstring>
 #include <functional>
 
-#include "stb_easy_font.h"
 
 namespace {
 const float kBg[4] = {0.012f, 0.014f, 0.02f, 0.94f};
@@ -20,41 +19,36 @@ const float kBlue[4] = {0.2f, 0.5f, 1.0f, 1};
 const float kGood[4] = {0.3f, 0.85f, 0.4f, 1};
 const float kBad[4] = {1.0f, 0.3f, 0.25f, 1};
 
-// stb_easy_font emits quads of 4 vertices: x, y, z, packed colour (16 bytes each)
-struct StbVertex {
-    float x, y, z;
-    unsigned char c[4];
-};
-
-void emit_quads(std::vector<FlatVertex> &t, const std::string &s, const float color[4],
-                const std::function<Vec3(float, float)> &map) {
-    static StbVertex buf[6000];
-    int quads = stb_easy_font_print(0, 0, const_cast<char *>(s.c_str()), nullptr, buf, sizeof(buf));
-    for (int q = 0; q < quads; ++q) {
-        const StbVertex *v = &buf[q * 4];
-        const int order[6] = {0, 1, 2, 0, 2, 3};
-        for (int k : order) {
-            Vec3 w = map(v[k].x, v[k].y);
-            t.push_back({w.x, w.y, w.z, color[0], color[1], color[2], color[3]});
-        }
-    }
-}
+// body text size in panel pixels (1 panel pixel = 1.25 mm, see Scene::layout)
+const float kEm = 10.5f;
 }  // namespace
 
-Vec3 Panel::to_world(float u, float v, float z) const {
-    return pose.apply(Vec3((u - width / 2) * px, (height / 2 - v) * px, z));
+void Panel::rect(std::vector<TexVertex> &t, float x0, float y0, float x1, float y1, const float c[4]) const {
+    // whole texels: crisp edges
+    float s = texel_scale, u = font_->white_u(), v = font_->white_v();
+    x0 = std::round(x0 * s), y0 = std::round(y0 * s), x1 = std::round(x1 * s), y1 = std::round(y1 * s);
+    const TexVertex a{x0, y0, 0, u, v, c[0], c[1], c[2], c[3]}, b{x1, y0, 0, u, v, c[0], c[1], c[2], c[3]},
+        cc{x1, y1, 0, u, v, c[0], c[1], c[2], c[3]}, d{x0, y1, 0, u, v, c[0], c[1], c[2], c[3]};
+    t.insert(t.end(), {a, b, cc, a, cc, d});
 }
 
-void Panel::rect(std::vector<FlatVertex> &t, float x0, float y0, float x1, float y1, const float c[4],
-                 float z) const {
-    Vec3 a = to_world(x0, y0, z), b = to_world(x1, y0, z), cc = to_world(x1, y1, z), d = to_world(x0, y1, z);
-    for (const Vec3 &p : {a, b, cc, a, cc, d}) t.push_back({p.x, p.y, p.z, c[0], c[1], c[2], c[3]});
+void Panel::disc(std::vector<TexVertex> &t, float cx, float cy, float r, const float c[4]) const {
+    float s = texel_scale, u = font_->white_u(), v = font_->white_v();
+    const int n = 24;
+    for (int i = 0; i < n; ++i) {
+        float a0 = 2 * kPi * i / n, a1 = 2 * kPi * (i + 1) / n;
+        t.push_back({cx * s, cy * s, 0, u, v, c[0], c[1], c[2], c[3]});
+        t.push_back({(cx + r * std::cos(a0)) * s, (cy + r * std::sin(a0)) * s, 0, u, v, c[0], c[1], c[2], c[3]});
+        t.push_back({(cx + r * std::cos(a1)) * s, (cy + r * std::sin(a1)) * s, 0, u, v, c[0], c[1], c[2], c[3]});
+    }
 }
 
-float Panel::text(std::vector<FlatVertex> &t, float x, float y, float scale, const std::string &s,
+float Panel::text(std::vector<TexVertex> &t, float x, float y, float scale, const std::string &s,
                   const float c[4]) const {
-    emit_quads(t, s, c, [&](float gx, float gy) { return to_world(x + gx * scale, y + gy * scale, 0.002f); });
-    return x + stb_easy_font_width(const_cast<char *>(s.c_str())) * scale;
+    FontStyle style = scale > 1.1f ? kMedium : kRegular;  // headings a little heavier
+    int size = (int)std::lround(kEm * scale * texel_scale);
+    float end = font_->layout(style, size, std::round(x * texel_scale), std::round(y * texel_scale), s, c, t);
+    return end / texel_scale;
 }
 
 static std::string short_path(const char *subpath) {
@@ -63,9 +57,10 @@ static std::string short_path(const char *subpath) {
     return s;
 }
 
-void Panel::build(const PanelInfo &info, std::vector<FlatVertex> &t) {
+void Panel::build(const PanelInfo &info, Font &font, std::vector<TexVertex> &t) {
+    font_ = &font;
     items_.clear();
-    rect(t, 0, 0, width, height, kBg, 0);
+    rect(t, 0, 0, width, height, kBg);
     float y = 14;
     text(t, 16, y, 2.0f, "Test Quest Controllers", kHead);
     y += 26;
@@ -82,7 +77,7 @@ void Panel::build(const PanelInfo &info, std::vector<FlatVertex> &t) {
         int idx = (int)items_.size();
         items_.push_back(item);
         const float *bg = i == info.current ? kCurrent : (info.hover_item == idx ? kHover : kRow);
-        rect(t, item.x0, item.y0, item.x1, item.y1, bg, 0.001f);
+        rect(t, item.x0, item.y0, item.x1, item.y1, bg);
         float x = text(t, 18, y + 2, 1, kProfiles[i].label, st.available ? kText : kDim);
         if (!st.note.empty()) text(t, x + 10, y + 2, 1, st.note, st.available ? kBlue : kDim);
         y += 17;
@@ -99,7 +94,7 @@ void Panel::build(const PanelInfo &info, std::vector<FlatVertex> &t) {
             PanelItem it{tg.kind, 0, tg.x0, y - 2, tg.x1, y + 13};
             int idx = (int)items_.size();
             items_.push_back(it);
-            rect(t, it.x0, it.y0, it.x1, it.y1, info.hover_item == idx ? kHover : kRow, 0.001f);
+            rect(t, it.x0, it.y0, it.x1, it.y1, info.hover_item == idx ? kHover : kRow);
             text(t, tg.x0 + 6, y + 2, 1, tg.label, kText);
         }
         y += 17;
@@ -177,6 +172,13 @@ void Panel::build(const PanelInfo &info, std::vector<FlatVertex> &t) {
         }
     }
     (void)y;
+
+    // where the rays point: drawn into the panel (the panel's layer covers the rest of the scene)
+    for (const PanelInfo::Cursor &c : info.cursors) {
+        const float ring[4] = {0.02f, 0.02f, 0.03f, 0.9f}, dot[4] = {1.0f, 0.5f, 0.1f, 1};
+        disc(t, c.u, c.v, 4.5f, ring);
+        disc(t, c.u, c.v, 3.2f, dot);
+    }
 }
 
 bool Panel::hit(const Pose &aim, float &u, float &v, Vec3 &world) const {
@@ -199,8 +201,15 @@ int Panel::item_at(float u, float v) const {
     return -1;
 }
 
-void world_text(std::vector<FlatVertex> &tris, const Pose &pose, float m, const std::string &s,
+void world_text(Font &font, std::vector<TexVertex> &tris, const Pose &pose, float em, const std::string &s,
                 const float color[4]) {
-    float w = stb_easy_font_width(const_cast<char *>(s.c_str()));
-    emit_quads(tris, s, color, [&](float gx, float gy) { return pose.apply(Vec3((gx - w / 2) * m, (3.5f - gy) * m, 0)); });
+    const int size = 48;  // rasterised once at this size; mipmaps + anisotropic filtering scale it down
+    float m = em / size, w = font.width(kMedium, size, s), cap = font.cap_height(kMedium, size);
+    size_t first = tris.size();
+    font.layout(kMedium, size, 0, 0, s, color, tris);
+    for (size_t i = first; i < tris.size(); ++i) {
+        TexVertex &v = tris[i];
+        Vec3 p = pose.apply(Vec3((v.x - w / 2) * m, (cap / 2 - v.y) * m, 0));  // capitals centred on the pose
+        v.x = p.x, v.y = p.y, v.z = p.z;
+    }
 }

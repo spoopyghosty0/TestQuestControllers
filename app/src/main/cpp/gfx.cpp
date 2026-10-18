@@ -1,6 +1,15 @@
 #include "gfx.h"
 
 #include <EGL/eglext.h>
+#include <GLES2/gl2ext.h>
+
+#include <algorithm>
+#include <cstring>
+
+#ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
+#define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
+#define GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT 0x84FF
+#endif
 
 #include "log.h"
 
@@ -161,6 +170,55 @@ out vec4 o_color;
 void main() { o_color = v_color; }
 )";
 
+static const char *kTexVs = R"(#version 300 es
+in vec3 a_pos;
+in vec4 a_second;
+in vec2 a_uv;
+uniform mat4 u_mvp;
+out vec4 v_color;
+out vec2 v_uv;
+void main() {
+    v_color = a_second;
+    v_uv = a_uv;
+    gl_Position = u_mvp * vec4(a_pos, 1.0);
+}
+)";
+
+// mode 0: coverage atlas (text); mode 1: premultiplied RGBA image
+static const char *kTexFs = R"(#version 300 es
+precision mediump float;
+in vec4 v_color;
+in vec2 v_uv;
+uniform sampler2D u_tex;
+uniform int u_mode;
+out vec4 o_color;
+void main() {
+    vec4 t = texture(u_tex, v_uv);
+    if (u_mode == 0) {
+        // blending happens in linear light (sRGB targets): thin the coverage a little so light text on the dark
+        // panel keeps the weight it has in gamma-space renderers
+        o_color = vec4(v_color.rgb, v_color.a * pow(t.r, 1.35));
+    } else {
+        o_color = t * v_color;
+    }
+}
+)";
+
+void set_anisotropy() {
+    static int max_aniso = -1;
+    if (max_aniso < 0) {
+        const char *ext = (const char *)glGetString(GL_EXTENSIONS);
+        max_aniso = 0;
+        if (ext && std::strstr(ext, "GL_EXT_texture_filter_anisotropic")) {
+            float m = 0;
+            glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &m);
+            max_aniso = (int)m;
+        }
+    }
+    if (max_aniso > 1)
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, (float)std::min(max_aniso, 8));
+}
+
 static void make_sphere(Mesh &mesh) {
     std::vector<float> v;
     std::vector<uint32_t> idx;
@@ -202,8 +260,23 @@ bool Renderer::init() {
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(FlatVertex), (void *)(3 * sizeof(float)));
     glBindVertexArray(0);
+    tex_ = program(kTexVs, kTexFs);
+    tex_mvp_ = glGetUniformLocation(tex_, "u_mvp");
+    tex_sampler_ = glGetUniformLocation(tex_, "u_tex");
+    tex_mode_ = glGetUniformLocation(tex_, "u_mode");
+    glGenVertexArrays(1, &tex_vao_);
+    glBindVertexArray(tex_vao_);
+    glGenBuffers(1, &tex_vbo_);
+    glBindBuffer(GL_ARRAY_BUFFER, tex_vbo_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(TexVertex), nullptr);
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(TexVertex), (void *)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(TexVertex), (void *)(5 * sizeof(float)));
+    glBindVertexArray(0);
     make_sphere(sphere);
-    return lit_ && flat_;
+    return lit_ && flat_ && tex_;
 }
 
 void Renderer::begin_eye(const Mat4 &view_proj) { view_proj_ = view_proj; }
@@ -238,18 +311,65 @@ void Renderer::flat(const std::vector<FlatVertex> &v, GLenum mode) {
 void Renderer::draw_flat(const std::vector<FlatVertex> &triangles) { flat(triangles, GL_TRIANGLES); }
 void Renderer::draw_lines(const std::vector<FlatVertex> &lines) { flat(lines, GL_LINES); }
 
-void EyeTarget::create(const std::vector<GLuint> &color_textures, int w, int h) {
+void Renderer::textured(const std::vector<TexVertex> &v, GLuint texture, int mode) {
+    if (v.empty()) return;
+    glUseProgram(tex_);
+    glUniformMatrix4fv(tex_mvp_, 1, GL_FALSE, view_proj_.m);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glUniform1i(tex_sampler_, 0);
+    glUniform1i(tex_mode_, mode);
+    glBindVertexArray(tex_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, tex_vbo_);
+    glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(TexVertex), v.data(), GL_STREAM_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, (GLsizei)v.size());
+}
+
+void Renderer::draw_text(const std::vector<TexVertex> &triangles, GLuint atlas) { textured(triangles, atlas, 0); }
+void Renderer::draw_image(const std::vector<TexVertex> &triangles, GLuint texture) {
+    textured(triangles, texture, 1);
+}
+
+void RenderTexture::create(int w, int h, int mip_levels) {
     width = w;
     height = h;
-    glGenRenderbuffers(1, &depth);
-    glBindRenderbuffer(GL_RENDERBUFFER, depth);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+    levels = mip_levels;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexStorage2D(GL_TEXTURE_2D, levels, GL_SRGB8_ALPHA8, w, h);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, levels > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    set_anisotropy();
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) LOGE("panel framebuffer incomplete: 0x%x", status);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void RenderTexture::release() {
+    if (fbo) glDeleteFramebuffers(1, &fbo);
+    if (texture) glDeleteTextures(1, &texture);
+    fbo = texture = 0;
+}
+
+void EyeTarget::create(const std::vector<GLuint> &color_textures, int w, int h, bool with_depth) {
+    width = w;
+    height = h;
+    if (with_depth) {
+        glGenRenderbuffers(1, &depth);
+        glBindRenderbuffer(GL_RENDERBUFFER, depth);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+    }
     fbos.resize(color_textures.size());
     glGenFramebuffers((GLsizei)fbos.size(), fbos.data());
     for (size_t i = 0; i < fbos.size(); ++i) {
         glBindFramebuffer(GL_FRAMEBUFFER, fbos[i]);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_textures[i], 0);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth);
+        if (depth) glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth);
         GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if (status != GL_FRAMEBUFFER_COMPLETE) LOGE("framebuffer incomplete: 0x%x", status);
     }

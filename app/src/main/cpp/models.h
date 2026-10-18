@@ -55,6 +55,7 @@ public:
     // Reads a file from the app's assets (e.g. "webxr/oculus-touch-v3/left.glb") into `out`.
     using Reader = std::function<bool(const std::string &path, std::vector<uint8_t> &out)>;
     void set_reader(Reader reader) { reader_ = std::move(reader); }
+    const Reader &reader() const { return reader_; }
     // profile as in Profile::family (a WebXR profile id), hand 0 = left, 1 = right. nullptr if missing or broken.
     const ControllerModel *get(const std::string &profile, int hand);
 
