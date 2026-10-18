@@ -108,6 +108,8 @@ private:
     bool placed_ = false;
     Pose anchor_;
 
+    bool cycle_ = false;
+    double last_cycle_ = 0;
     void load_choice();
     void save_choice();
     bool init_loader();
@@ -398,21 +400,15 @@ void App::close_session() {
 void App::switch_to(int index) {
     int from = current_;
     LOGI("switch: %s -> %s", kProfiles[from].path, kProfiles[index].path);
-    close_session();
-    int minor = kProfiles[index].min_minor;
-    if (minor != instance_minor_) {
-        close_instance();
-        if (!open_instance(minor)) {
-            statuses_[index].note = "needs OpenXR 1.1 (this runtime has 1.0)";
-            message_ = std::string(kProfiles[index].label) + ": the runtime refused an OpenXR 1.1 instance";
-            index = from;
-            if (!open_instance(kProfiles[index].min_minor)) {
-                LOGE("cannot reopen the OpenXR instance");
-                exit_ = true;
-                return;
-            }
-        }
+    // Only the session is recreated: the instance lives for the whole run. Destroying it unloads the runtime, and
+    // layers between the app and the runtime (e.g. FramePort's) keep pointers into the old one: the next OpenXR
+    // call crashed. The 1.1 types need the 1.1 instance the app asks for at start (greyed out under 1.0).
+    if (kProfiles[index].min_minor > instance_minor_) {
+        message_ = std::string(kProfiles[index].label) + " needs OpenXR 1.1; this run has a 1.0 instance";
+        return;
     }
+    close_session();
+    (void)from;
     current_ = index;
     update_statuses();
     if (!open_session(current_)) {
@@ -732,10 +728,15 @@ void App::run() {
         ANativeActivity_finish(android_->activity);
     } else {
         load_choice();
-        int minor = kProfiles[current_].min_minor;
-        if (!open_instance(minor) && minor == 1) {
-            current_ = 0;
-            open_instance(0);
+        // one instance for the whole run (see switch_to): OpenXR 1.1 if the runtime takes it, so every type can be
+        // picked (1.0 profiles work on a 1.1 instance too), else 1.0
+        if (!open_instance(1) && !open_instance(0)) exit_ = true;
+        if (kProfiles[current_].min_minor > instance_minor_) current_ = 0;
+        {
+            const char *dir = android_->activity->externalDataPath ? android_->activity->externalDataPath
+                                                                    : android_->activity->internalDataPath;
+            cycle_ = std::ifstream(std::string(dir) + "/cycle").good();
+            if (cycle_) LOGI("cycle mode: the next controller type every 8 s");
         }
         update_statuses();
         if (!instance_ || !open_session(current_)) exit_ = true;
@@ -759,6 +760,18 @@ void App::run() {
             continue;
         }
         poll_events();
+        // debug: a file named "cycle" in the app's files folder switches the controller type every 8 s (to test
+        // switching on a headset nobody wears)
+        if (cycle_ && running_ && pending_ < 0 && now_s() - last_cycle_ > 8) {
+            last_cycle_ = now_s();
+            for (int k = 1; k <= kProfileCount; ++k) {
+                int next = (current_ + k) % kProfileCount;
+                if (statuses_[next].available) {
+                    pending_ = next;
+                    break;
+                }
+            }
+        }
         if (pending_ >= 0) {
             int next = pending_;
             pending_ = -1;
