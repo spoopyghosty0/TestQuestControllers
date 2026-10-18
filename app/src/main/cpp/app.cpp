@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <fstream>
 #include <set>
@@ -110,6 +111,8 @@ private:
 
     bool cycle_ = false;
     double last_cycle_ = 0;
+    bool steamvr_ = false;         // SteamVR's runtime (vrclient.so) is in the process: switching restarts the app
+    double close_at_ = 0;          // > 0: close the app then (after a switch on SteamVR)
     int switching_to_ = -1;        // controller type to switch to once the current session has ended
     double switch_started_ = 0;
     bool pending_finish_ = false;  // the session ended: make the new one (outside the event loop)
@@ -263,6 +266,13 @@ bool App::open_instance(int minor) {
     snprintf(rt, sizeof(rt), "%s %u.%u.%u", ip.runtimeName, XR_VERSION_MAJOR(ip.runtimeVersion),
              XR_VERSION_MINOR(ip.runtimeVersion), XR_VERSION_PATCH(ip.runtimeVersion));
     runtime_ = rt;
+    {
+        // SteamVR's runtime library in the process (whatever name the runtime or a layer in between reports)
+        std::ifstream maps("/proc/self/maps");
+        std::string line;
+        while (!steamvr_ && std::getline(maps, line)) steamvr_ = line.find("vrclient.so") != std::string::npos;
+        if (steamvr_) LOGI("SteamVR runtime: switching controller types restarts the app");
+    }
     api_ = minor == 1 ? "OpenXR 1.1 instance" : "OpenXR 1.0 instance";
 
     XrSystemGetInfo sys{XR_TYPE_SYSTEM_GET_INFO};
@@ -412,9 +422,20 @@ void App::switch_to(int index) {
         return;
     }
     (void)from;
-    // A running session is ended the way OpenXR expects (request exit -> STOPPING -> xrEndSession -> IDLE/EXITING)
-    // before it's destroyed: destroyed while running, SteamVR kept treating it as the app's session and gave the new
-    // one ~0.4 fps (the picture froze after every switch). finish_switch() makes the new session once it ended.
+    // SteamVR (the Steam Frame) can't run more than about two sessions in one process: its in-process renderer binds
+    // its shared GPU resources to one Vulkan device (a new GL context -> assert "m_pDevice == m_pExportDevice",
+    // abort; the same context -> vkQueueSubmit -13 and no frames, a frozen picture). There the choice is saved and
+    // the app closes; it starts with that type next time.
+    if (steamvr_) {
+        current_ = index;
+        save_choice();
+        message_ = std::string(kProfiles[index].label) + " is chosen. Start the app again to use it (closing...)";
+        LOGI("switch on SteamVR: saved %s, closing the app", kProfiles[index].path);
+        close_at_ = now_s() + 2.5;
+        return;
+    }
+    // Elsewhere a running session is ended the way OpenXR expects (request exit -> STOPPING -> xrEndSession ->
+    // IDLE/EXITING) before it's destroyed; finish_switch() makes the new session once it ended.
     switching_to_ = index;
     if (session_ && running_) {
         switch_started_ = now_s();
@@ -791,6 +812,10 @@ void App::run() {
             continue;
         }
         poll_events();
+        if (close_at_ > 0 && now_s() >= close_at_) {  // a switch on SteamVR: the message was shown, close
+            exit_ = true;
+            continue;
+        }
         if (switching_to_ >= 0 && (pending_finish_ || now_s() - switch_started_ > 3)) {
             if (!pending_finish_) LOGW("switch: the session didn't end within 3 s; replacing it anyway");
             finish_switch();
@@ -808,6 +833,7 @@ void App::run() {
                 }
             }
         }
+        if (pending_ >= 0 && close_at_ > 0) pending_ = -1;  // closing for a switch already
         if (pending_ >= 0 && switching_to_ < 0) {
             int next = pending_;
             pending_ = -1;
@@ -826,4 +852,8 @@ void App::run() {
 
 void android_main(android_app *app) {
     App(app).run();
+    // Finishing a NativeActivity leaves its process running, and a container (e.g. the Steam Frame's Lepton) only
+    // ends the game once the process is gone: without this, closing after a switch left a running app with no
+    // picture. OpenXR and GL are shut down already.
+    std::exit(0);
 }

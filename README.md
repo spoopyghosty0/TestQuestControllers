@@ -20,6 +20,8 @@ Steam Frame: use the button (needs [FramePort](https://frameport.app)). Quest: s
 ## Use
 
 - **Pick a controller:** point at the panel, pull the trigger (or hold the stick click for 2 s).
+  On the Steam Frame the app then closes: start it again to use that controller (SteamVR's runtime can't
+  switch within one app start).
 - **Model:** blue = touched, orange = pressed, yellow = trigger or grip pulled.
 - **Panel:** the runtime's answer, the controller it reports, and every input's live value.
 - **Toggles:** vibration, passthrough, recenter.
