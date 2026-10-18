@@ -32,6 +32,16 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6.4.0
 
+      - name: NDK and CMake
+        run: |
+          # explicit install (with retries): Gradle's on-demand NDK download fails now and then
+          for i in 1 2 3; do
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018" "cmake;3.22.1" > /dev/null \
+              && break
+            echo "sdkmanager failed, retrying"; sleep 10
+          done
+          test -d "$ANDROID_HOME/ndk/27.2.12479018"
+
       - name: Release keystore
         env:
           KEYSTORE_B64: ${{ secrets.TQC_KEYSTORE_B64 }}
