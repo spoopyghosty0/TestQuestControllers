@@ -133,7 +133,7 @@ void Scene::draw(const Mat4 &view_proj, SceneData &d) {
     const char *family = kProfiles[d.current].family;
     for (int h = 0; h < 2; ++h) {
         const ControllerModel *model = models.get(family, h);
-        if (!model) continue;
+        if (!model || (d.only_hand >= 0 && h != d.only_hand)) continue;
         if (input.grip_valid[h]) draw_model(*model, h, input.grip[h], 1.0f, false, d, tris);
         draw_model(*model, h, display_pose(d, h), kModelScale, d.labels, d, tris);
         if (input.aim_valid[h]) {
@@ -154,6 +154,6 @@ void Scene::draw(const Mat4 &view_proj, SceneData &d) {
     d.panel.input = d.input;
     d.panel.current = d.current;
     renderer.draw_lines(lines);
-    panel.build(d.panel, tris);  // the panel last: it's partly transparent
+    if (d.only_hand < 0) panel.build(d.panel, tris);  // the panel last: it's partly transparent
     renderer.draw_flat(tris);
 }

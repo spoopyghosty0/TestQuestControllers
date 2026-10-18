@@ -10,6 +10,6 @@
   ],
   "frameport": {
     "description": "Pick a Quest controller type and see every input the runtime delivers for it on a 3D model.",
-    "icon": "https://raw.githubusercontent.com/spoopyghosty0/TestQuestControllers/v0.1.0/docs/icon.png"
+    "icon": "https://raw.githubusercontent.com/spoopyghosty0/TestQuestControllers/main/docs/icon.png"
   }
 }

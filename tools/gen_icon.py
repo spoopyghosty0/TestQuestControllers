@@ -20,16 +20,22 @@ def main():
                     "3.4", "--icon"], check=True, capture_output=True)
     arr = np.array(Image.open(shot).convert("RGBA"))
     arr[(arr[:, :, :3] < 6).all(axis=2), 3] = 0  # the cleared background
-    model = Image.fromarray(arr).resize((400, 400), Image.LANCZOS)
+    model = Image.fromarray(arr)
+    model = model.crop(model.getbbox())  # the controller alone, so it can fill the icon
+    fit = 450 / max(model.size)
+    model = model.resize((round(model.width * fit), round(model.height * fit)), Image.LANCZOS)
 
+    # a light diagonal blue -> orange gradient: the white controller stays readable at 48-64 px
     size = 512
-    bg = Image.new("RGBA", (size, size), (14, 16, 24, 255))
-    glow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(glow)
-    d.ellipse((50, 60, 300, 310), fill=(40, 110, 255, 120))
-    d.ellipse((210, 200, 470, 450), fill=(255, 110, 20, 120))
-    bg = Image.alpha_composite(bg, glow.filter(ImageFilter.GaussianBlur(70)))
-    bg.alpha_composite(model, ((size - 400) // 2, (size - 400) // 2))
+    t = np.clip((np.arange(size)[None, :] + np.arange(size)[:, None]) / (2 * size - 2), 0, 1)[..., None]
+    blue, orange = np.array([38, 96, 214], float), np.array([236, 118, 34], float)
+    grad = (blue * (1 - t) + orange * t).astype(np.uint8)
+    bg = Image.fromarray(np.dstack([grad, np.full((size, size, 1), 255, np.uint8)]), "RGBA")
+    at = ((size - model.width) // 2, (size - model.height) // 2)
+    shadow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    shadow.paste((10, 14, 30, 150), (at[0], at[1] + 14), model.getchannel("A"))
+    bg = Image.alpha_composite(bg, shadow.filter(ImageFilter.GaussianBlur(14)))
+    bg.alpha_composite(model, at)
     mask = Image.new("L", (size, size), 0)
     ImageDraw.Draw(mask).rounded_rectangle((0, 0, size - 1, size - 1), radius=110, fill=255)
     icon = Image.new("RGBA", (size, size), (0, 0, 0, 0))

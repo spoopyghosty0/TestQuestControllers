@@ -114,7 +114,8 @@ int main(int argc, char **argv) {
     Mat4 view = Mat4::identity();
     if (icon) {
         d.labels = false;
-        fov = {deg(-11), deg(11), deg(11), deg(-11)};
+        d.only_hand = 0;
+        fov = {deg(-20), deg(20), deg(20), deg(-20)};  // the whole controller (gen_icon.py crops to it)
         Vec3 target = scene.display_pose(d, 0).p + Vec3(0, -0.02f, 0);
         Vec3 fwd = normalize(target), right = normalize(cross(fwd, {0, 1, 0})), up = cross(right, fwd);
         view = Mat4::from_pose(Pose(Quat::from_basis(right, up, -fwd), Vec3()).inverse());

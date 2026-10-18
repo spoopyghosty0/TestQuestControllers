@@ -16,6 +16,7 @@ struct SceneData {
     Pose anchor;                   // the user's place: models and panel are laid out in front of it
     bool flash[2] = {false, false};  // a vibration was just sent to this hand
     bool labels = true;              // part names next to the enlarged models
+    int only_hand = -1;              // >= 0: draw just this hand's enlarged model, no panel (the app icon)
     PanelInfo panel;
 };
 

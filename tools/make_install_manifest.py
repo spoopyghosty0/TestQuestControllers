@@ -31,7 +31,8 @@ def main():
         "frameport": {
             "description": "Pick a Quest controller type and see every input the runtime delivers for it on a 3D "
                            "model.",
-            "icon": f"https://raw.githubusercontent.com/{args.repo}/{args.tag}/docs/icon.png",
+            # from main, so a new icon shows without a release
+            "icon": f"https://raw.githubusercontent.com/{args.repo}/main/docs/icon.png",
         },
     }
     Path(args.out).write_text(json.dumps(manifest, indent=2) + "\n")
