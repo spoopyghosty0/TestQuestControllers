@@ -44,7 +44,14 @@ public:
     void sync(XrSession session, XrSpace base, XrTime time);
     void destroy();
 
-    void haptic(XrSession session, int hand, float amplitude, float seconds);
+    // Vibrates one hand. `output` names the haptic output ("/output/haptic", or a localized one such as Touch Pro's
+    // "/output/haptic_trigger_fb"); one the profile doesn't have falls back to /output/haptic. Each output's first
+    // result is kept in haptic_results (and logged).
+    XrResult haptic(XrSession session, int hand, float amplitude, float seconds, const std::string &output = "/output/haptic");
+    // The localized output for a part if the profile has one ("trigger" -> haptic_trigger(_fb), thumbstick/thumbrest
+    // -> haptic_thumb(_fb)), else "/output/haptic".
+    std::string haptic_output_for(const std::string &part) const;
+    std::map<std::string, std::string> haptic_results;
 
     PartState part(int hand, const std::string &name) const;
     bool trigger_down(int hand) const;
@@ -65,9 +72,9 @@ public:
 private:
     XrInstance instance_ = XR_NULL_HANDLE;
     XrActionSet set_ = XR_NULL_HANDLE;
-    XrAction grip_action_ = XR_NULL_HANDLE, aim_action_ = XR_NULL_HANDLE, haptic_action_ = XR_NULL_HANDLE;
+    XrAction grip_action_ = XR_NULL_HANDLE, aim_action_ = XR_NULL_HANDLE;
+    std::map<std::string, XrAction> haptic_actions_;  // output subpath -> action
     XrSpace grip_space_[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE}, aim_space_[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};
-    std::vector<XrAction> extra_actions_;
 };
 
 const char *result_name(XrInstance instance, XrResult result);

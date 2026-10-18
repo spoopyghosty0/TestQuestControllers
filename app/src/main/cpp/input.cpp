@@ -35,6 +35,7 @@ XrResult Input::create(XrInstance instance, const Profile &profile, const std::s
     instance_ = instance;
     rows.clear();
     skipped_notes.clear();
+    haptic_results.clear();
     bound = skipped = 0;
     hand_paths[0] = path(instance, "/user/hand/left");
     hand_paths[1] = path(instance, "/user/hand/right");
@@ -88,8 +89,7 @@ XrResult Input::create(XrInstance instance, const Profile &profile, const std::s
         if (action == XR_NULL_HANDLE) continue;
         if (std::string(c.subpath) == "/input/grip/pose") grip_action_ = action;
         else if (std::string(c.subpath) == "/input/aim/pose") aim_action_ = action;
-        else if (std::string(c.subpath) == "/output/haptic") haptic_action_ = action;
-        else if (c.type == XR_ACTION_TYPE_VIBRATION_OUTPUT) extra_actions_.push_back(action);
+        else if (c.type == XR_ACTION_TYPE_VIBRATION_OUTPUT) haptic_actions_[c.subpath] = action;
         for (int h = 0; h < 2; ++h) {
             if (!(c.hands & (1 << h))) continue;
             std::string full = std::string(h == 0 ? "/user/hand/left" : "/user/hand/right") + c.subpath;
@@ -288,16 +288,34 @@ bool Input::stick_click(int hand) const {
     return false;
 }
 
-void Input::haptic(XrSession session, int hand, float amplitude, float seconds) {
-    if (!haptic_action_) return;
+std::string Input::haptic_output_for(const std::string &part) const {
+    const char *names[2] = {nullptr, nullptr};
+    if (part == "trigger") names[0] = "/output/haptic_trigger_fb", names[1] = "/output/haptic_trigger";
+    if (part == "thumbstick" || part == "thumbrest")
+        names[0] = "/output/haptic_thumb_fb", names[1] = "/output/haptic_thumb";
+    for (const char *n : names)
+        if (n && haptic_actions_.count(n)) return n;
+    return "/output/haptic";
+}
+
+XrResult Input::haptic(XrSession session, int hand, float amplitude, float seconds, const std::string &output) {
+    auto it = haptic_actions_.find(output);
+    if (it == haptic_actions_.end()) it = haptic_actions_.find("/output/haptic");
+    if (it == haptic_actions_.end()) return XR_ERROR_ACTION_TYPE_MISMATCH;
     XrHapticVibration vib{XR_TYPE_HAPTIC_VIBRATION};
     vib.amplitude = amplitude;
     vib.duration = (XrDuration)(seconds * 1e9);
     vib.frequency = XR_FREQUENCY_UNSPECIFIED;
     XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};
-    info.action = haptic_action_;
+    info.action = it->second;
     info.subactionPath = hand_paths[hand];
-    xrApplyHapticFeedback(session, &info, (const XrHapticBaseHeader *)&vib);
+    XrResult r = xrApplyHapticFeedback(session, &info, (const XrHapticBaseHeader *)&vib);
+    if (!haptic_results.count(it->first)) {
+        haptic_results[it->first] = result_name(instance_, r);
+        LOGI("vibration %s (%s hand) -> %s", it->first.c_str(), hand == 0 ? "left" : "right",
+             haptic_results[it->first].c_str());
+    }
+    return r;
 }
 
 void Input::destroy() {
@@ -309,7 +327,7 @@ void Input::destroy() {
     }
     if (set_) xrDestroyActionSet(set_);  // destroys its actions too
     set_ = XR_NULL_HANDLE;
-    grip_action_ = aim_action_ = haptic_action_ = XR_NULL_HANDLE;
-    extra_actions_.clear();
+    grip_action_ = aim_action_ = XR_NULL_HANDLE;
+    haptic_actions_.clear();
     rows.clear();
 }

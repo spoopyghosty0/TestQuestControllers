@@ -20,11 +20,14 @@ struct PanelInfo {
     std::string reported[2];
     std::string message;  // e.g. "No input with ...: back to ..."
     bool haptics = true;
+    bool passthrough = false;
+    std::string passthrough_note;  // how passthrough works here, or why it doesn't
+    std::string haptic_result;     // first result of each haptic output, e.g. "haptic XR_SUCCESS"
     const Input *input = nullptr;
     int hover_item = -1;
 };
 
-enum ItemKind { kItemProfile, kItemHaptics, kItemRecenter };
+enum ItemKind { kItemProfile, kItemHaptics, kItemPassthrough, kItemRecenter };
 
 struct PanelItem {
     ItemKind kind;

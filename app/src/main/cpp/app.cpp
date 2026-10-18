@@ -45,6 +45,14 @@ const char *kOptionalExtensions[] = {
     "XR_FB_touch_controller_pro",
     "XR_META_touch_controller_plus",
     "XR_FB_touch_controller_proximity",
+    "XR_FB_passthrough",
+};
+
+// Haptic feedback while testing: a tick when a finger touches a part, a pulse when it's pressed, and while the
+// trigger or grip is held a rumble that follows how far it's pulled.
+struct HapticTrack {
+    bool touched = false, pressed = false;
+    double last_rumble = 0;
 };
 
 struct Swap {
@@ -85,7 +93,18 @@ private:
     double focused_since_ = 0, stick_held_since_[2] = {0, 0}, haptic_flash_[2] = {0, 0}, last_report_ = 0;
     bool haptics_ = true, trig_prev_[2] = {false, false};
     int hover_ = -1;
-    std::map<std::string, bool> pressed_prev_[2];
+    std::map<std::string, HapticTrack> haptic_track_[2];
+
+    // passthrough: XR_FB_passthrough (Quest; what Quest games use), else the ALPHA_BLEND blend mode
+    bool passthrough_wanted_ = false;
+    std::string passthrough_mode_;  // "" off, "XR_FB_passthrough" or "ALPHA_BLEND"
+    std::string passthrough_note_;
+    std::vector<XrEnvironmentBlendMode> blend_modes_;
+    XrPassthroughFB pt_ = XR_NULL_HANDLE;
+    XrPassthroughLayerFB pt_layer_ = XR_NULL_HANDLE;
+    void set_passthrough(bool on);
+    void stop_passthrough();
+    void update_haptics(int hand, double t);
     bool placed_ = false;
     Pose anchor_;
 
@@ -111,15 +130,73 @@ private:
 // ---------------------------------------------------------------- persistence
 void App::load_choice() {
     std::ifstream f(std::string(android_->activity->internalDataPath) + "/controller_type.txt");
-    std::string p;
+    std::string p, pt;
     if (f >> p)
         for (int i = 0; i < kProfileCount; ++i)
             if (p == kProfiles[i].path) current_ = i;
+    if (f >> pt) passthrough_wanted_ = pt == "passthrough";
 }
 
 void App::save_choice() {
     std::ofstream f(std::string(android_->activity->internalDataPath) + "/controller_type.txt");
-    f << kProfiles[current_].path << "\n";
+    f << kProfiles[current_].path << "\n" << (passthrough_wanted_ ? "passthrough" : "opaque") << "\n";
+}
+
+// ---------------------------------------------------------------- passthrough
+void App::stop_passthrough() {
+    passthrough_mode_.clear();
+    if (!instance_ || (!pt_ && !pt_layer_)) return;
+    auto destroy_layer = (PFN_xrDestroyPassthroughLayerFB)nullptr;
+    auto destroy = (PFN_xrDestroyPassthroughFB)nullptr;
+    xrGetInstanceProcAddr(instance_, "xrDestroyPassthroughLayerFB", (PFN_xrVoidFunction *)&destroy_layer);
+    xrGetInstanceProcAddr(instance_, "xrDestroyPassthroughFB", (PFN_xrVoidFunction *)&destroy);
+    if (pt_layer_ && destroy_layer) destroy_layer(pt_layer_);
+    if (pt_ && destroy) destroy(pt_);
+    pt_layer_ = XR_NULL_HANDLE;
+    pt_ = XR_NULL_HANDLE;
+    passthrough_mode_.clear();
+}
+
+void App::set_passthrough(bool on) {
+    stop_passthrough();
+    passthrough_wanted_ = on;
+    if (!on || !session_) return;
+    if (enabled_.count("XR_FB_passthrough")) {
+        PFN_xrCreatePassthroughFB create = nullptr;
+        PFN_xrCreatePassthroughLayerFB create_layer = nullptr;
+        xrGetInstanceProcAddr(instance_, "xrCreatePassthroughFB", (PFN_xrVoidFunction *)&create);
+        xrGetInstanceProcAddr(instance_, "xrCreatePassthroughLayerFB", (PFN_xrVoidFunction *)&create_layer);
+        XrResult r = XR_ERROR_FUNCTION_UNSUPPORTED;
+        if (create && create_layer) {
+            XrPassthroughCreateInfoFB info{XR_TYPE_PASSTHROUGH_CREATE_INFO_FB};
+            info.flags = XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT_FB;
+            r = create(session_, &info, &pt_);
+            if (XR_SUCCEEDED(r)) {
+                XrPassthroughLayerCreateInfoFB layer{XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB};
+                layer.passthrough = pt_;
+                layer.flags = XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT_FB;
+                layer.purpose = XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION_FB;
+                r = create_layer(session_, &layer, &pt_layer_);
+            }
+        }
+        LOGI("passthrough via XR_FB_passthrough -> %s", result_name(instance_, r));
+        if (XR_SUCCEEDED(r)) {
+            passthrough_mode_ = "XR_FB_passthrough";
+            passthrough_note_ = "XR_FB_passthrough";
+            return;
+        }
+        stop_passthrough();
+        passthrough_note_ = std::string("XR_FB_passthrough failed: ") + result_name(instance_, r);
+    }
+    for (XrEnvironmentBlendMode m : blend_modes_)
+        if (m == XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND) {
+            passthrough_mode_ = "ALPHA_BLEND";
+            passthrough_note_ = "blend mode ALPHA_BLEND";
+            LOGI("passthrough via the ALPHA_BLEND blend mode");
+            return;
+        }
+    if (passthrough_note_.empty()) passthrough_note_ = "not offered by this runtime";
+    LOGI("passthrough: %s", passthrough_note_.c_str());
 }
 
 // ---------------------------------------------------------------- instance / session
@@ -276,6 +353,15 @@ bool App::open_session(int index) {
     }
     input_.attach(session_);
     {
+        uint32_t n = 0;
+        xrEnumerateEnvironmentBlendModes(instance_, system_, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &n, nullptr);
+        blend_modes_.assign(n, XR_ENVIRONMENT_BLEND_MODE_OPAQUE);
+        xrEnumerateEnvironmentBlendModes(instance_, system_, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, n, &n,
+                                         blend_modes_.data());
+        passthrough_note_.clear();
+        set_passthrough(passthrough_wanted_);
+    }
+    {
         std::ifstream demo(std::string(android_->activity->externalDataPath ? android_->activity->externalDataPath
                                                                             : android_->activity->internalDataPath) +
                            "/demo");
@@ -290,6 +376,9 @@ bool App::open_session(int index) {
 }
 
 void App::close_session() {
+    bool wanted = passthrough_wanted_;
+    stop_passthrough();
+    passthrough_wanted_ = wanted;
     input_.destroy();
     for (auto &s : swaps_) {
         s.target.release();
@@ -331,8 +420,8 @@ void App::switch_to(int index) {
         return;
     }
     save_choice();
-    pressed_prev_[0].clear();
-    pressed_prev_[1].clear();
+    haptic_track_[0].clear();
+    haptic_track_[1].clear();
 }
 
 void App::update_statuses() {
@@ -433,6 +522,32 @@ void App::place(XrTime time) {
     placed_ = true;
 }
 
+void App::update_haptics(int h, double t) {
+    std::set<std::string> parts;
+    for (const auto &row : input_.rows)
+        if (row.hand == h && !row.part.empty() && row.action) parts.insert(row.part);
+    for (const std::string &part : parts) {
+        PartState st = input_.part(h, part);
+        HapticTrack &tr = haptic_track_[h][part];
+        std::string out = input_.haptic_output_for(part);
+        bool sent = false;
+        if (haptics_) {
+            if (st.pressed && !tr.pressed) sent = XR_SUCCEEDED(input_.haptic(session_, h, 0.6f, 0.06f, out));
+            else if ((st.touched || st.near) && !tr.touched && !st.pressed)
+                sent = XR_SUCCEEDED(input_.haptic(session_, h, 0.15f, 0.015f, out));
+            bool analog = part == "trigger" || part == "squeeze";
+            if (analog && st.value > 0.05f && t - tr.last_rumble > 0.08) {
+                // refreshed every 80 ms for 100 ms: a continuous rumble as strong as the pull
+                sent = XR_SUCCEEDED(input_.haptic(session_, h, 0.15f + 0.75f * st.value, 0.1f, out)) || sent;
+                tr.last_rumble = t;
+            }
+        }
+        if (sent) haptic_flash_[h] = t;
+        tr.pressed = st.pressed;
+        tr.touched = st.touched || st.near;
+    }
+}
+
 void App::update_ui(XrTime time) {
     double t = now_s();
     scene_.layout(anchor_);
@@ -452,6 +567,9 @@ void App::update_ui(XrTime time) {
                     message_.clear();
                 } else if (it.kind == kItemHaptics) {
                     haptics_ = !haptics_;
+                } else if (it.kind == kItemPassthrough) {
+                    set_passthrough(!passthrough_wanted_);
+                    save_choice();
                 } else if (it.kind == kItemRecenter) {
                     place(time);
                 }
@@ -474,17 +592,7 @@ void App::update_ui(XrTime time) {
         } else {
             stick_held_since_[h] = 0;
         }
-        // vibrate on each newly pressed part
-        for (const auto &row : input_.rows) {
-            if (row.hand != h || row.part.empty()) continue;
-            bool p = input_.part(h, row.part).pressed;
-            bool &prev = pressed_prev_[h][row.part];
-            if (p && !prev && haptics_) {
-                input_.haptic(session_, h, 0.5f, 0.05f);
-                haptic_flash_[h] = t;
-            }
-            prev = p;
-        }
+        update_haptics(h, t);
     }
     hover_ = hover;
 
@@ -509,8 +617,9 @@ void App::render_eye(const XrView &view, int eye, uint32_t image) {
     glEnable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glClearColor(kClearColor[0], kClearColor[1], kClearColor[2], 1);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    if (passthrough_mode_.empty()) glClearColor(kClearColor[0], kClearColor[1], kClearColor[2], 1);
+    else glClearColor(0, 0, 0, 0);  // the real world shows through
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     SceneData d;
@@ -527,6 +636,10 @@ void App::render_eye(const XrView &view, int eye, uint32_t image) {
     d.panel.reported[1] = reported_[1];
     d.panel.message = message_;
     d.panel.haptics = haptics_;
+    d.panel.passthrough = !passthrough_mode_.empty();
+    d.panel.passthrough_note = passthrough_note_;
+    for (const auto &hr : input_.haptic_results)
+        d.panel.haptic_result += (d.panel.haptic_result.empty() ? "" : ", ") + hr.first.substr(8) + " " + hr.second;
     d.panel.hover_item = hover_;
     Mat4 view_m = Mat4::from_pose(Pose(view.pose).inverse());
     scene_.draw(Mat4::projection(view.fov, 0.05f, 50.0f) * view_m, d);
@@ -542,7 +655,10 @@ void App::frame() {
 
     std::vector<XrCompositionLayerProjectionView> proj(2, {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW});
     XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-    const XrCompositionLayerBaseHeader *layers[] = {(const XrCompositionLayerBaseHeader *)&layer};
+    XrCompositionLayerPassthroughFB pt_layer{XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB};
+    pt_layer.layerHandle = pt_layer_;
+    const XrCompositionLayerBaseHeader *layers[2];
+    uint32_t layer_count = 0;
     bool rendered = false;
 
     if (fs.shouldRender) {
@@ -574,6 +690,9 @@ void App::frame() {
                 proj[eye].subImage.imageRect = {{0, 0}, {s.width, s.height}};
             }
             layer.space = local_;
+            if (!passthrough_mode_.empty())
+                layer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
+                                   XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
             layer.viewCount = 2;
             layer.views = proj.data();
             rendered = true;
@@ -581,9 +700,12 @@ void App::frame() {
     }
     XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
     end.displayTime = fs.predictedDisplayTime;
-    end.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-    end.layerCount = rendered ? 1 : 0;
-    end.layers = rendered ? layers : nullptr;
+    end.environmentBlendMode =
+        passthrough_mode_ == "ALPHA_BLEND" ? XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND : XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    if (pt_layer_) layers[layer_count++] = (const XrCompositionLayerBaseHeader *)&pt_layer;  // under the scene
+    if (rendered) layers[layer_count++] = (const XrCompositionLayerBaseHeader *)&layer;
+    end.layerCount = layer_count;
+    end.layers = layer_count ? layers : nullptr;
     XrResult r = xrEndFrame(session_, &end);
     if (XR_FAILED(r)) {
         static int logged = 0;

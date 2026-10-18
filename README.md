@@ -59,9 +59,15 @@ greyed out with the reason. Most Quest games use OpenXR 1.0, so the 1.0 types ru
 - **Read the panel:** the runtime's answer to the bindings ("XR_SUCCESS" or the error), the profile the runtime
   says each hand has, and every input with its live value. A `*` marks inputs that have fired; "inactive" means the
   runtime sends nothing for that input.
-- **Vibrate on press** pulses the controller on every newly pressed part (checks that vibration reaches it).
-  **Recenter** puts everything in front of you again.
-- The chosen type is remembered for the next start.
+- **Vibration** (on by default): the controller ticks when a finger touches a part, pulses when a part is pressed,
+  and rumbles while the trigger or grip is held, as strongly as it's pulled. Touch Pro's trigger and thumb parts use
+  their own vibration motors. The panel shows the runtime's answer for each vibration output, so you can see whether
+  vibration reaches the controller at all.
+- **Passthrough** shows your room behind the controllers: through `XR_FB_passthrough` where the runtime offers it
+  (Quest, and what Quest games use), else through the `ALPHA_BLEND` blend mode. The panel says which one works, or
+  why neither does.
+- **Recenter** puts everything in front of you again.
+- The controller type and the passthrough setting are remembered for the next start.
 
 Every input change is logged with the tag `TQC`, so a session can be checked afterwards (`adb logcat -s TQC`; on
 the Steam Frame the line is in the game's log).

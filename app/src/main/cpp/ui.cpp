@@ -89,16 +89,24 @@ void Panel::build(const PanelInfo &info, std::vector<FlatVertex> &t) {
     }
     y += 4;
     {
-        PanelItem h{kItemHaptics, 0, 12, y - 2, 200, y + 13};
-        int idx = (int)items_.size();
-        items_.push_back(h);
-        rect(t, h.x0, h.y0, h.x1, h.y1, info.hover_item == idx ? kHover : kRow, 0.001f);
-        text(t, 18, y + 2, 1, info.haptics ? "Vibrate on press: on" : "Vibrate on press: off", kText);
-        PanelItem r{kItemRecenter, 0, 212, y - 2, 360, y + 13};
-        idx = (int)items_.size();
-        items_.push_back(r);
-        rect(t, r.x0, r.y0, r.x1, r.y1, info.hover_item == idx ? kHover : kRow, 0.001f);
-        text(t, 218, y + 2, 1, "Recenter", kText);
+        struct Toggle { ItemKind kind; float x0, x1; std::string label; };
+        const Toggle toggles[] = {
+            {kItemHaptics, 12, 186, info.haptics ? "Vibration: on" : "Vibration: off"},
+            {kItemPassthrough, 196, 380, info.passthrough ? "Passthrough: on" : "Passthrough: off"},
+            {kItemRecenter, 390, 548, "Recenter"},
+        };
+        for (const Toggle &tg : toggles) {
+            PanelItem it{tg.kind, 0, tg.x0, y - 2, tg.x1, y + 13};
+            int idx = (int)items_.size();
+            items_.push_back(it);
+            rect(t, it.x0, it.y0, it.x1, it.y1, info.hover_item == idx ? kHover : kRow, 0.001f);
+            text(t, tg.x0 + 6, y + 2, 1, tg.label, kText);
+        }
+        y += 17;
+        std::string notes;
+        if (!info.passthrough_note.empty()) notes = "Passthrough: " + info.passthrough_note;
+        if (!info.haptic_result.empty()) notes += (notes.empty() ? "" : "   ") + std::string("Vibration: ") + info.haptic_result;
+        if (!notes.empty()) text(t, 16, y + 1, 1, notes, kDim);
     }
     y += 22;
 
