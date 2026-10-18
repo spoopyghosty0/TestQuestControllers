@@ -1,6 +1,7 @@
 {
   "schema": "framedrop.install/v1",
   "name": "Test Quest Controllers",
+  "version": "0.1.0",
   "files": [
     {
       "url": "https://github.com/spoopyghosty0/TestQuestControllers/releases/download/v0.1.0/TestQuestControllers-0.1.0.apk",

@@ -25,6 +25,8 @@ def main():
     manifest = {
         "schema": "framedrop.install/v1",
         "name": "Test Quest Controllers",
+        # FramePort offers an update when a newer manifest (same address) has a higher version
+        "version": args.tag.lstrip("v"),
         "files": [{"url": f"{base}/{apk.name}", "sha256": hashlib.sha256(apk.read_bytes()).hexdigest()}],
         "frameport": {
             "description": "Pick a Quest controller type and see every input the runtime delivers for it on a 3D "
