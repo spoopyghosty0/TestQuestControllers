@@ -7,6 +7,9 @@
 #include "models.h"
 #include "ui.h"
 
+// Background colour (linear RGB): light enough for the black controllers to stand out.
+constexpr float kClearColor[3] = {0.045f, 0.05f, 0.065f};
+
 struct SceneData {
     int current = 0;               // index into kProfiles
     const Input *input = nullptr;

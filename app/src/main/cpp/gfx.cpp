@@ -136,7 +136,8 @@ void main() {
     float key = abs(dot(n, normalize(vec3(0.3, 0.8, 0.5))));
     float fill = abs(dot(n, normalize(vec3(-0.6, -0.2, 0.3)))) * 0.3;
     vec3 base = u_color * mix(vec3(1.0), texture(u_tex, v_uv).rgb, u_has_tex);
-    vec3 lit = base * (0.3 + 0.75 * key + fill);
+    float rim = pow(1.0 - abs(n.z), 3.0) * 0.35;  // edges light up: dark plastic keeps its outline
+    vec3 lit = base * (0.42 + 0.8 * key + fill) + vec3(0.09, 0.1, 0.12) * rim;
     lit = mix(lit, u_tint * (0.55 + 0.45 * key), u_tint_amount);
     o_color = vec4(mix(lit, u_color, u_emissive), 1.0);
 }

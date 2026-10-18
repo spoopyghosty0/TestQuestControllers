@@ -108,7 +108,7 @@ int main(int argc, char **argv) {
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glClearColor(0.008f, 0.009f, 0.014f, 1);
+    glClearColor(kClearColor[0], kClearColor[1], kClearColor[2], 1);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     XrFovf fov{deg(-48), deg(48), deg(38), deg(-38)};
     Mat4 view = Mat4::identity();

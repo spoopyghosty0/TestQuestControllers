@@ -15,9 +15,15 @@ whether touch and analog values come through, and which controller the runtime s
 wherever Quest controllers are emulated or remapped (for example the Steam Frame through FramePort or another
 converter), and on a real Quest as the reference.
 
-![The app in demo mode: the Touch controllers in your hands and enlarged in front of you, next to the panel](docs/screenshot.png)
+![Test Quest Controllers with the Quest 2 Touch controllers: in your hands, enlarged in front of you, and the panel](docs/screenshots/touch.png)
 
-*Demo mode, rendered on a PC from the app's own drawing code (`tools/render_host`).*
+| | |
+|---|---|
+| ![Touch Plus (Quest 3/3S)](docs/screenshots/touch-plus.png) **Touch Plus** (Quest 3/3S) | ![Touch Pro (Quest Pro)](docs/screenshots/touch-pro.png) **Touch Pro** (Quest Pro) |
+| ![Quest 1 / Rift S Touch](docs/screenshots/quest1-rift-s.png) **Quest 1 / Rift S Touch** | ![Rift CV1 Touch](docs/screenshots/rift-cv1.png) **Rift CV1 Touch** |
+| ![Oculus Go controller](docs/screenshots/go.png) **Oculus Go controller** | |
+
+*Demo mode (parts light up in turn), rendered on a PC from the app's own drawing code with `tools/render_host`.*
 
 ## Controller types
 
