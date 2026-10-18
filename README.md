@@ -2,7 +2,7 @@
 
 # Test Quest Controllers
 
-[![Install with FramePort](https://cdn.jsdelivr.net/gh/spoopyghosty0/frameport@main/docs/badges/install-with-frameport-animated.svg)](https://frameport.app/install?manifest=https%3A%2F%2Fgithub.com%2Fspoopyghosty0%2FTestQuestControllers%2Freleases%2Flatest%2Fdownload%2Fframeport-install.json)
+[![Install with FramePort](https://cdn.jsdelivr.net/gh/spoopyghosty0/frameport@main/docs/badges/install-with-frameport-animated.svg)](https://frameport.app/install?manifest=https%3A%2F%2Fraw.githubusercontent.com%2Fspoopyghosty0%2FTestQuestControllers%2Fmain%2Fframeport-install.json)
 
 Needs [FramePort](https://frameport.app) (Steam Frame). On a Quest: [download the APK](https://github.com/spoopyghosty0/TestQuestControllers/releases/latest) and sideload it.
 
@@ -93,7 +93,9 @@ python3 tools/gen_icon.py           # the app icon, from the renderer's close-up
 ```
 
 Releases are built by GitHub Actions from a `v*` tag matching `versionName` in `app/build.gradle.kts`: the APK, the
-install manifest the button above opens (`frameport-install.json`) and `SHA256SUMS.txt`.
+install manifest (`frameport-install.json`) and `SHA256SUMS.txt`. The workflow then commits the new manifest to
+`main`: the button above opens that copy through raw.githubusercontent.com, which (unlike release downloads) lets the
+install page read the app's name and icon.
 
 ## Licences
 

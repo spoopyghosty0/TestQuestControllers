@@ -3,8 +3,9 @@
 
     python3 tools/make_install_manifest.py --apk FILE --tag vX.Y.Z [--repo owner/name] [--out FILE]
 
-The README's "Install with FramePort" button opens releases/latest/download/frameport-install.json, so the manifest
-always describes the newest release; it names that release's APK by its versioned address with its SHA-256.
+The release workflow attaches it to the release and commits it to main, where the README's "Install with FramePort"
+button reads it (raw.githubusercontent.com: the install page can read it there, CORS). It names the release's APK by
+its versioned address with its SHA-256.
 """
 import argparse
 import hashlib
